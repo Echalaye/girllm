@@ -9,6 +9,7 @@ import type { StoredMessage } from '../chat/sessionStore.js';
 import { complete } from '../llm/complete.js';
 import type { LlmProvider } from '../llm/types.js';
 import { formatTranscript } from '../memory/transcript.js';
+import { formatNow } from '../prompt/timeContext.js';
 
 export interface PhotoIdea {
   caption: string;
@@ -24,6 +25,9 @@ export interface PhotoPromptInput {
   /** What the user asked for ("a selfie at the gym"), may be empty. */
   request: string;
   language?: string | undefined;
+  /** Current moment, so light and setting match the time of day. */
+  now?: Date | undefined;
+  timeZone?: string | undefined;
 }
 
 const MAX_CAPTION_CHARS = 300;
@@ -57,15 +61,19 @@ export function buildPhotoPrompt(input: PhotoPromptInput) {
         `${c.name} (an adult) is chatting with ${user} and is about to send a photo of themselves.`,
         'Return ONLY a JSON object: {"caption": "...", "scene": "..."}.',
         `"caption": the short message ${c.name} writes with the photo, in their own voice, written in ${language}. One or two sentences; it may start with an *action*.`,
-        '"scene": the photo for an image generator, in ENGLISH, as comma-separated tags: framing (selfie, mirror selfie, portrait…),',
-        'pose, expression, outfit, location, lighting, time of day.',
+        '"scene": the photo for an image generator, in ENGLISH, as 12-30 comma-separated tags, in this order:',
+        '  shot type (close-up selfie, mirror selfie, waist-up photo taken by a friend…), camera angle,',
+        '  pose and expression, outfit, location with two or three concrete details, light source, time of day.',
         looks,
-        'Make it consistent with the conversation and the request. Keep it natural, like a real photo between partners.',
+        'The light and setting MUST match the current time of day. Only one person in the photo.',
+        'Make it consistent with the conversation, her life and the request: a natural, everyday photo between partners,',
+        'not a studio shoot.',
       ].join('\n'),
     },
     {
       role: 'user' as const,
       content: [
+        input.now ? `Current time: ${formatNow(input.now, 'en-GB', input.timeZone)}` : '',
         input.summary ? `Story so far:\n${input.summary}` : '',
         `Recent messages:\n${formatTranscript(input.recent.slice(-CONTEXT_MESSAGES), c.name, user) || '(none)'}`,
         `Photo request from ${user}: ${input.request || `(none — ${c.name} decides, based on the moment)`}`,

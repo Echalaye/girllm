@@ -24,6 +24,7 @@ export function makeCharacter(overrides: Partial<Character> = {}): Character {
     character_version: '',
     extensions: {},
     appearance: '',
+    style: 'roleplay',
     ...overrides,
   };
 }

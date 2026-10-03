@@ -115,3 +115,23 @@ describe('parseConfig image settings', () => {
     expect(() => parseConfig({ IMAGE_CHECKPOINT: 'x"; rm -rf' })).toThrow(/IMAGE_CHECKPOINT/);
   });
 });
+
+describe('parseConfig photo quality settings', () => {
+  it('enables a modest hires pass and realistic defaults', () => {
+    const c = parseConfig({});
+    expect(c.images.hires).toEqual({ scale: 1.25, denoise: 0.35, steps: 15 });
+    expect(c.images.style).toMatch(/^candid smartphone photo/);
+    expect(c.images.negative).toContain('plastic skin');
+    expect(parseConfig({ IMAGE_HIRES_SCALE: '1' }).images.hires.scale).toBe(1);
+    expect(() => parseConfig({ IMAGE_HIRES_SCALE: '3' })).toThrow(/IMAGE_HIRES_SCALE/);
+  });
+});
+
+describe('parseConfig blank values', () => {
+  it('uses the built-in style and negative prompt when the .env lines are empty', () => {
+    const c = parseConfig({ IMAGE_STYLE: '', IMAGE_NEGATIVE_PROMPT: '  ' });
+    expect(c.images.style).toMatch(/^candid smartphone photo/);
+    expect(c.images.negative).toMatch(/^cgi/);
+    expect(parseConfig({ IMAGE_STYLE: 'anime style' }).images.style).toBe('anime style');
+  });
+});

@@ -9,7 +9,7 @@ import { ChatService } from '../src/chat/chatService.js';
 import { ComfyClient, ComfyError } from '../src/images/comfyClient.js';
 import { ImageService } from '../src/images/imageService.js';
 import { ImageStore } from '../src/images/imageStore.js';
-import { parsePhotoIdea } from '../src/images/photoPrompt.js';
+import { buildPhotoPrompt, parsePhotoIdea } from '../src/images/photoPrompt.js';
 import { assertSafe, cardStatesMinorAge, ImageRefusedError, mentionsMinor } from '../src/images/safety.js';
 import { buildTxt2ImgWorkflow } from '../src/images/workflow.js';
 import { GpuGate } from '../src/util/gpuGate.js';
@@ -241,7 +241,7 @@ describe('ImageService + ChatService.sendPhoto', () => {
     expect(comfy.freed).toBe(1);
 
     const positive = comfy.queued[0]!.prompt['3']!.inputs.text as string;
-    expect(positive).toMatch(/^adult, mature adult, photograph, woman, 26 years old, auburn hair, selfie/);
+    expect(positive).toMatch(/^adult, mature adult, solo, photograph, woman, 26 years old, auburn hair, selfie/);
     expect(comfy.queued[0]!.prompt['4']!.inputs.text).toMatch(/^blurry, child, .*underage/);
     const saved = store.get(session.id)!.messages;
     expect(saved.at(-1)!.imageId).toBe(image.id);
@@ -343,5 +343,63 @@ describe('safety with accented words', () => {
   });
   it.each(['adolescence lointaine', 'adorable', 'kidding', 'minority report'])('accepts %s', (t) => {
     expect(mentionsMinor(t)).toBe(false);
+  });
+});
+
+describe('hires workflow', () => {
+  const base = {
+    checkpoint: 'x',
+    positive: 'p',
+    negative: 'n',
+    width: 832,
+    height: 1216,
+    steps: 30,
+    cfg: 4,
+    sampler: 'dpmpp_sde',
+    scheduler: 'karras',
+    seed: 7,
+  };
+
+  it('adds an upscale + low-denoise second pass and saves its output', () => {
+    const wf = buildTxt2ImgWorkflow({ ...base, hires: { scale: 1.25, denoise: 0.35, steps: 15 } });
+    expect(wf['8']).toEqual({
+      class_type: 'ImageScaleBy',
+      inputs: { image: ['6', 0], upscale_method: 'lanczos', scale_by: 1.25 },
+    });
+    expect(wf['10']!.inputs).toMatchObject({
+      latent_image: ['9', 0],
+      denoise: 0.35,
+      steps: 15,
+      seed: 7,
+      sampler_name: 'dpmpp_sde',
+    });
+    expect(wf['7']!.inputs.images).toEqual(['11', 0]);
+    for (const node of Object.values(wf)) {
+      for (const v of Object.values(node.inputs)) if (Array.isArray(v)) expect(wf).toHaveProperty(String(v[0]));
+    }
+  });
+
+  it('stays single-pass when the scale is 1 or hires is absent', () => {
+    expect(buildTxt2ImgWorkflow({ ...base, hires: { scale: 1, denoise: 0.35, steps: 15 } })['8']).toBeUndefined();
+    expect(buildTxt2ImgWorkflow(base)['7']!.inputs.images).toEqual(['6', 0]);
+  });
+});
+
+describe('photo idea prompt', () => {
+  it('gives the current time and asks for a time-consistent, single-person scene', () => {
+    const [system, user] = buildPhotoPrompt({
+      character: makeCharacter({ appearance: 'woman, auburn hair' }),
+      userName: 'Etienne',
+      recent: [],
+      summary: '',
+      request: '',
+      language: 'French',
+      now: new Date('2026-10-03T21:30:00Z'),
+      timeZone: 'Europe/Paris',
+    });
+    expect(user!.content).toMatch(/Current time: Saturday.*3 October 2026.*23:30/);
+    expect(system!.content).toContain('MUST match the current time of day');
+    expect(system!.content).toContain('Only one person');
+    expect(system!.content).toContain('do NOT describe them'); // appearance is fixed by the card
   });
 });

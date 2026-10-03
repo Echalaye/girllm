@@ -14,6 +14,16 @@ Nothing leaves your machine: the model runs on your GPU through [Ollama](https:/
 
 ## Features
 
+### Human-like conversation (step 4b)
+
+- **Two writing styles** per character: `texting` (short, natural phone messages: Aria) or `roleplay` (narrative
+  with _actions_: the default for community cards).
+- **She knows what time it is**: day, hour, and how long since your last message. No more "good morning" at
+  11 pm, and a three-day silence gets noticed.
+- **Less repetition**: the prompt points out how her last replies started and the phrases she keeps reusing.
+- **Model comparison**: `npm run compare -- <model> <model>` runs the same French conversations through each model
+  and writes a report, so you can choose on evidence.
+
 ### Photos (step 4)
 
 - **📷 Ask for a photo**: type what you'd like ("a selfie at the climbing gym") and click 📷, or leave the box empty
@@ -113,8 +123,9 @@ Open **http://127.0.0.1:3210**.
 1. Download the latest **ComfyUI portable for Windows (NVIDIA)** from the ComfyUI GitHub releases and extract it.
    Recent builds ship PyTorch with CUDA 12.8, which the **RTX 5060 (Blackwell) requires**. Older builds won't use
    the GPU.
-2. Put an **SDXL checkpoint** (`.safetensors` only) in `ComfyUI\models\checkpoints\`: the official SDXL base 1.0,
-   or a realistic SDXL fine-tune for more natural photos.
+2. Put an **SDXL checkpoint** (`.safetensors` only) in `ComfyUI\models\checkpoints\`. The official SDXL base 1.0
+   works, but a photorealistic fine-tune gives much more natural people. See
+   [Getting better photos](#getting-better-photos).
 3. Start ComfyUI with `run_nvidia_gpu.bat`. It listens on `http://127.0.0.1:8188`. Or let `start.bat` do it: set
    `COMFYUI_DIR=C:\path\to\ComfyUI_windows_portable` in `.env`.
 4. In `.env`, set `IMAGE_CHECKPOINT=` to the file name exactly as it appears in ComfyUI, then restart girllm.
@@ -140,17 +151,28 @@ In that case, lower `CONTEXT_TOKENS` (e.g. 6144), use a smaller quantization
 
 ## Choosing a model (8 GB VRAM)
 
-| Size                      | Quantization    | Context | Notes                                   |
-| ------------------------- | --------------- | ------- | --------------------------------------- |
-| 12B (Mistral Nemo family) | Q4_K_M / IQ4_XS | 6–8k    | Best quality for roleplay. Fits tightly |
-| 7–8B (Llama 3.1, Qwen)    | Q5_K_M / Q6_K   | 12–16k  | Faster, longer context, decent French   |
+12B models in 4-bit are the sweet spot for 8 GB. Candidates worth comparing:
 
-Roleplay fine-tunes of these models (on Hugging Face, in GGUF format) are usually much better than the
-base instruct models. Ollama can pull them directly:
+| Model                               | Pull command                                                 | Notes                                                                       |
+| ----------------------------------- | ------------------------------------------------------------ | --------------------------------------------------------------------------- |
+| Mistral Nemo 12B Instruct           | `ollama pull mistral-nemo:12b-instruct-2407-q4_K_M`          | Good French (Mistral AI is French). General-purpose, a bit "assistant-like" |
+| Mag-Mell R1 (Nemo 12B fine-tune)    | `ollama pull hf.co/bartowski/MN-12B-Mag-Mell-R1-GGUF:IQ4_XS` | Roleplay/creative fine-tune: more personality. Check its French             |
+| Rocinante v1.1 (Nemo 12B fine-tune) | `ollama pull hf.co/bartowski/Rocinante-12B-v1.1-GGUF:IQ4_XS` | Roleplay/creative fine-tune. Check its French                               |
+
+`IQ4_XS` (~6.7 GB) leaves more room for the context than `Q4_K_M` (7.5 GB) with almost the same quality.
+Roleplay fine-tunes are mostly trained on English, so their French can be weaker than the base model's. Don't
+guess, compare:
 
 ```powershell
-ollama pull hf.co/<user>/<repo>-GGUF:Q4_K_M
+npm run compare -- mistral-nemo:12b-instruct-2407-q4_K_M hf.co/bartowski/MN-12B-Mag-Mell-R1-GGUF:IQ4_XS
 ```
+
+The report (in `data\model-comparison-….md`) shows every reply side by side, the speed, and automatic flags:
+assistant-like phrases, writing your lines, not French. Read the replies themselves: the flags catch problems,
+not charm. Then set the winner in `LLM_MODEL`.
+
+**Sampling**: `TEMPERATURE=0.7` and `MIN_P=0.05` are good defaults. Go up to `0.8`–`0.9` for more surprise, and
+down to `0.6` if she loses the thread.
 
 Only download **`.gguf`** / **`.safetensors`** files, never pickle (`.bin`, `.pt`) files from unknown sources.
 
@@ -169,7 +191,8 @@ Your name comes from `USER_NAME` in `.env`.
 | `description`, `personality`, `scenario` | Character definition in the system prompt                                                                                                                                                                                    |
 | `mes_example`                            | Example dialogue (style reference). Blocks separated by `<START>`                                                                                                                                                            |
 | `first_mes`                              | Greeting that opens every new chat                                                                                                                                                                                           |
-| `post_history_instructions`              | Reminder injected after the history (strong steering)                                                                                                                                                                        |
+| `post_history_instructions`              | Reminder added at the end of the system prompt (strong steering)                                                                                                                                                             |
+| `extensions.girllm.style`                | `"texting"` (short natural messages) or `"roleplay"` (narrative, default). Ignored if the card has its own `system_prompt`                                                                                                   |
 | `extensions.girllm.appearance`           | Fixed look used for **every photo** (image-prompt tags): `"woman, 26 years old, shoulder-length wavy auburn hair, green eyes, …"`. Without it, the LLM improvises the look from the description, which varies between photos |
 
 All characters must be adults. The default system prompt states it explicitly, and photos are refused for a card
@@ -189,46 +212,48 @@ Mistral Nemo-based models (Mistral AI is French) and Qwen models handle French w
 
 ## Configuration (`.env`)
 
-| Variable                            | Default                                 | Description                                                                                                           |
-| ----------------------------------- | --------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `HOST`                              | `127.0.0.1`                             | Keep loopback: the API has **no authentication**                                                                      |
-| `PORT`                              | `3210`                                  |                                                                                                                       |
-| `LLM_PROVIDER`                      | `ollama`                                | `ollama` = native Ollama API (recommended). `openai` = any OpenAI-compatible server (llama.cpp, KoboldCpp, LM Studio) |
-| `LLM_BASE_URL`                      | `http://127.0.0.1:11434`                | Base URL **without** `/v1`                                                                                            |
-| `LLM_KEEP_ALIVE`                    | `30m`                                   | How long Ollama keeps the model in VRAM after the last request (`2h`, `-1` = forever)                                 |
-| `LLM_MODEL`                         | `mistral-nemo:12b-instruct-2407-q4_K_M` | Model name as known by the backend                                                                                    |
-| `LLM_API_KEY`                       | _(empty)_                               | Only for backends requiring one                                                                                       |
-| `CONTEXT_TOKENS`                    | `8192`                                  | Context window. Applied automatically with `ollama`; with `openai` it must match the backend                          |
-| `MAX_REPLY_TOKENS`                  | `400`                                   | Max reply length                                                                                                      |
-| `TEMPERATURE` / `TOP_P`             | `0.7` / `0.95`                          | Sampling. Lower temperature = more coherent                                                                           |
-| `MIN_P`                             | `0.05`                                  | Drops very unlikely tokens: the best guard against incoherent tangents                                                |
-| `REPEAT_PENALTY`                    | `1.1`                                   | `>1` discourages repetition                                                                                           |
-| `CHARACTERS_DIR`                    | `./characters`                          |                                                                                                                       |
-| `USER_NAME`                         | `User`                                  | Your name in the story                                                                                                |
-| `REPLY_LANGUAGE`                    | _(empty)_                               | Force the reply language, e.g. `French`. Letters only. Empty = no constraint                                          |
-| `DATA_DIR`                          | `./data`                                | Where `girllm.db` (chats + memories) is stored. Git-ignored                                                           |
-| `MEMORY_ENABLED`                    | `true`                                  | `false` = step 1 behaviour (chats are still saved)                                                                    |
-| `EMBEDDING_MODEL`                   | `paraphrase-multilingual`               | Embedding model for memory search. Empty = memories picked by recency only                                            |
-| `EMBEDDING_BASE_URL`                | = `LLM_BASE_URL`                        | Backend serving the embedding model                                                                                   |
-| `MEMORY_TOP_K`                      | `8`                                     | Max memories injected per reply                                                                                       |
-| `MEMORY_EXTRACT_EVERY`              | `4`                                     | Facts are extracted once this many new messages are pending                                                           |
-| `VOICE_ENABLED`                     | `true`                                  | Voice buttons only appear for the models that are installed                                                           |
-| `MODELS_DIR`                        | `./models`                              | Where `npm run setup:voice` puts the voice models. Git-ignored                                                        |
-| `STT_MODEL`                         | `whisper-base`                          | `whisper-tiny`, `whisper-base`, `whisper-small` (more accurate, ~3× slower)                                           |
-| `STT_LANGUAGE`                      | _(empty = auto)_                        | The language you speak, e.g. `fr`. Setting it avoids misdetections on short sentences                                 |
-| `TTS_VOICE`                         | `fr-siwis`                              | `fr-siwis`, `fr-jessica` (female), `fr-pierre`, `fr-tom` (male), `en-amy`                                             |
-| `TTS_SPEED`                         | `1`                                     | `0.5`–`2`                                                                                                             |
-| `VOICE_THREADS`                     | `4`                                     | CPU threads per voice engine                                                                                          |
-| `IMAGES_ENABLED`                    | `true`                                  | Shows the 📷 button (it explains why if ComfyUI isn't ready)                                                          |
-| `COMFYUI_DIR`                       | _(empty)_                               | ComfyUI install folder, so `start.bat` can start it. Only used by the launcher                                        |
-| `COMFYUI_URL`                       | `http://127.0.0.1:8188`                 |                                                                                                                       |
-| `IMAGE_CHECKPOINT`                  | _(empty = no photos)_                   | SDXL checkpoint file name, as listed by ComfyUI                                                                       |
-| `IMAGE_WIDTH` / `IMAGE_HEIGHT`      | `832` / `1216`                          | Multiples of 8. SDXL works best around 1 megapixel                                                                    |
-| `IMAGE_STEPS` / `IMAGE_CFG`         | `25` / `5.5`                            |                                                                                                                       |
-| `IMAGE_SAMPLER` / `IMAGE_SCHEDULER` | `dpmpp_2m` / `karras`                   | ComfyUI names                                                                                                         |
-| `IMAGE_STYLE`                       | `photograph, realistic, …`              | Tags added to every photo, e.g. `anime style, cel shading`                                                            |
-| `IMAGE_NEGATIVE_PROMPT`             | `lowres, blurry, …`                     | Child-related terms are always added on top, whatever you set                                                         |
-| `LOG_LEVEL`                         | `info`                                  | `debug`, `info`, `warn`…                                                                                              |
+| Variable                                    | Default                                 | Description                                                                                                                     |
+| ------------------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `HOST`                                      | `127.0.0.1`                             | Keep loopback: the API has **no authentication**                                                                                |
+| `PORT`                                      | `3210`                                  |                                                                                                                                 |
+| `LLM_PROVIDER`                              | `ollama`                                | `ollama` = native Ollama API (recommended). `openai` = any OpenAI-compatible server (llama.cpp, KoboldCpp, LM Studio)           |
+| `LLM_BASE_URL`                              | `http://127.0.0.1:11434`                | Base URL **without** `/v1`                                                                                                      |
+| `LLM_KEEP_ALIVE`                            | `30m`                                   | How long Ollama keeps the model in VRAM after the last request (`2h`, `-1` = forever)                                           |
+| `LLM_MODEL`                                 | `mistral-nemo:12b-instruct-2407-q4_K_M` | Model name as known by the backend                                                                                              |
+| `LLM_API_KEY`                               | _(empty)_                               | Only for backends requiring one                                                                                                 |
+| `CONTEXT_TOKENS`                            | `8192`                                  | Context window. Applied automatically with `ollama`; with `openai` it must match the backend                                    |
+| `MAX_REPLY_TOKENS`                          | `400`                                   | Max reply length                                                                                                                |
+| `TEMPERATURE` / `TOP_P`                     | `0.7` / `0.95`                          | Sampling. Lower temperature = more coherent                                                                                     |
+| `MIN_P`                                     | `0.05`                                  | Drops very unlikely tokens: the best guard against incoherent tangents                                                          |
+| `REPEAT_PENALTY`                            | `1.1`                                   | `>1` discourages repetition                                                                                                     |
+| `CHARACTERS_DIR`                            | `./characters`                          |                                                                                                                                 |
+| `USER_NAME`                                 | `User`                                  | Your name in the story                                                                                                          |
+| `REPLY_LANGUAGE`                            | _(empty)_                               | Force the reply language, e.g. `French`. Letters only. Empty = no constraint                                                    |
+| `DATA_DIR`                                  | `./data`                                | Where `girllm.db` (chats + memories) is stored. Git-ignored                                                                     |
+| `MEMORY_ENABLED`                            | `true`                                  | `false` = step 1 behaviour (chats are still saved)                                                                              |
+| `EMBEDDING_MODEL`                           | `paraphrase-multilingual`               | Embedding model for memory search. Empty = memories picked by recency only                                                      |
+| `EMBEDDING_BASE_URL`                        | = `LLM_BASE_URL`                        | Backend serving the embedding model                                                                                             |
+| `MEMORY_TOP_K`                              | `8`                                     | Max memories injected per reply                                                                                                 |
+| `MEMORY_EXTRACT_EVERY`                      | `4`                                     | Facts are extracted once this many new messages are pending                                                                     |
+| `VOICE_ENABLED`                             | `true`                                  | Voice buttons only appear for the models that are installed                                                                     |
+| `MODELS_DIR`                                | `./models`                              | Where `npm run setup:voice` puts the voice models. Git-ignored                                                                  |
+| `STT_MODEL`                                 | `whisper-base`                          | `whisper-tiny`, `whisper-base`, `whisper-small` (more accurate, ~3× slower)                                                     |
+| `STT_LANGUAGE`                              | _(empty = auto)_                        | The language you speak, e.g. `fr`. Setting it avoids misdetections on short sentences                                           |
+| `TTS_VOICE`                                 | `fr-siwis`                              | `fr-siwis`, `fr-jessica` (female), `fr-pierre`, `fr-tom` (male), `en-amy`                                                       |
+| `TTS_SPEED`                                 | `1`                                     | `0.5`–`2`                                                                                                                       |
+| `VOICE_THREADS`                             | `4`                                     | CPU threads per voice engine                                                                                                    |
+| `IMAGES_ENABLED`                            | `true`                                  | Shows the 📷 button (it explains why if ComfyUI isn't ready)                                                                    |
+| `COMFYUI_DIR`                               | _(empty)_                               | ComfyUI install folder, so `start.bat` can start it. Only used by the launcher                                                  |
+| `COMFYUI_URL`                               | `http://127.0.0.1:8188`                 |                                                                                                                                 |
+| `IMAGE_CHECKPOINT`                          | _(empty = no photos)_                   | SDXL checkpoint file name, as listed by ComfyUI                                                                                 |
+| `IMAGE_WIDTH` / `IMAGE_HEIGHT`              | `832` / `1216`                          | Multiples of 8. SDXL works best around 1 megapixel                                                                              |
+| `IMAGE_STEPS` / `IMAGE_CFG`                 | `25` / `5.5`                            | See [Getting better photos](#getting-better-photos) for per-checkpoint values                                                   |
+| `IMAGE_SAMPLER` / `IMAGE_SCHEDULER`         | `dpmpp_2m` / `karras`                   | ComfyUI names                                                                                                                   |
+| `IMAGE_STYLE`                               | `candid smartphone photo, RAW photo, …` | Tags added to every photo. For an anime look: `anime style, cel shading, vibrant colors` (and remove `anime` from the negative) |
+| `IMAGE_NEGATIVE_PROMPT`                     | `cgi, 3d render, plastic skin, …`       | Child-related terms are always added on top, whatever you set                                                                   |
+| `IMAGE_HIRES_SCALE`                         | `1.25`                                  | Second refinement pass: sharper face and skin, ~1.6× slower. `1` = off                                                          |
+| `IMAGE_HIRES_DENOISE` / `IMAGE_HIRES_STEPS` | `0.35` / `15`                           | How much the second pass may change the image / its steps                                                                       |
+| `LOG_LEVEL`                                 | `info`                                  | `debug`, `info`, `warn`…                                                                                                        |
 
 Invalid values stop the app at startup with an explicit message.
 
@@ -322,6 +347,31 @@ reply tokens ─► SentenceSplitter (in the browser) ─► each complete sente
 
 ---
 
+## Getting better photos
+
+1. **Use a photorealistic checkpoint.** SDXL base is generic. For example **RealVisXL V5.0** (openrail++ licence):
+   download `RealVisXL_V5.0_fp16.safetensors` (6.94 GB) from
+   [huggingface.co/SG161222/RealVisXL_V5.0](https://huggingface.co/SG161222/RealVisXL_V5.0/tree/main) (download
+   arrow next to the file), put it in `ComfyUI\models\checkpoints\`, then in `.env`:
+
+   ```
+   IMAGE_CHECKPOINT=RealVisXL_V5.0_fp16.safetensors
+   IMAGE_SAMPLER=dpmpp_sde
+   IMAGE_SCHEDULER=karras
+   IMAGE_STEPS=30
+   IMAGE_CFG=4
+   ```
+
+   (The model page recommends DPM++ SDE Karras with 30+ steps. CFG 3–5 avoids the "over-cooked" look.)
+
+2. **Keep the hires pass on** (`IMAGE_HIRES_SCALE=1.25`, the default). It's what sharpens eyes and skin. On 8 GB,
+   don't go above `1.5`.
+3. **Write a precise `appearance`** in the card: hair (length, colour, texture), eyes, skin, build, distinctive
+   details (freckles, glasses…). A _descriptive_ age ("in her mid-twenties") gives more natural results than a
+   number.
+4. **Describe the photo you want**: "mirror selfie in the elevator, gym clothes" beats "a photo". Without a
+   request, she picks something that fits the time of day and the conversation.
+
 ## How memory works
 
 ```
@@ -352,7 +402,13 @@ each reply ─► prompt = character card
 1. ✅ **Streaming chat + character persona**
 2. ✅ **Memory**: SQLite persistence, running summary, long-term memories with semantic search, mood
 3. ✅ **Voice**: Whisper speech-to-text and Piper French voices, on the CPU via sherpa-onnx
-4. ✅ **Photos on demand** (this step): ComfyUI SDXL, with GPU handover between the LLM and the image model
+4. ✅ **Photos on demand**: ComfyUI SDXL, with GPU handover between the LLM and the image model
+   - 4a ✅ Lint, formatting, CI, one-click launcher
+   - 4b ✅ More human text (styles, time awareness, anti-repetition, model comparison) and better photos
+   - 4c ⏳ Settings in the app, character editor, hands-free voice, nicer interface
+   - 4d ⏳ She sends photos on her own, writes first, per-character voices, lorebooks, and a **consistent face**:
+     a reference portrait per character (generated in the app, or imported with consent) applied to every photo
+     with IP-Adapter
 
 Ideas for later: a LoRA or IP-Adapter for an even more consistent face, voice cloning (option B: a Python
 XTTS service), and per-character voices.

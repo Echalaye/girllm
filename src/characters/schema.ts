@@ -53,6 +53,12 @@ export interface Character extends CardFields {
    * Empty if the card doesn't define one.
    */
   appearance: string;
+  /**
+   * Writing style (`extensions.girllm.style`): "texting" = short, natural
+   * phone messages; "roleplay" = narrative roleplay with *actions*.
+   * Community cards default to "roleplay", which is what they are written for.
+   */
+  style: CharacterStyle;
   /** Where the card was loaded from — for logs only, never sent to clients. */
   sourceFile: string;
 }
@@ -67,6 +73,16 @@ export interface CharacterSummary {
 
 export function toSummary(c: Character): CharacterSummary {
   return { id: c.id, name: c.name, creatorNotes: c.creator_notes, tags: c.tags };
+}
+
+export const CHARACTER_STYLES = ['texting', 'roleplay'] as const;
+export type CharacterStyle = (typeof CHARACTER_STYLES)[number];
+
+/** Read `extensions.girllm.style`, defaulting to "roleplay". */
+export function readStyle(extensions: Record<string, unknown>): CharacterStyle {
+  const girllm = extensions.girllm;
+  const style = girllm && typeof girllm === 'object' ? (girllm as { style?: unknown }).style : undefined;
+  return (CHARACTER_STYLES as readonly unknown[]).includes(style) ? (style as CharacterStyle) : 'roleplay';
 }
 
 /** Max length of `extensions.girllm.appearance`. */
