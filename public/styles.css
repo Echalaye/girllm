@@ -1,0 +1,130 @@
+/* girllm — minimal chat UI. Colour tokens first; dark by default. */
+:root {
+  --bg: #15131a;
+  --surface: #1f1c26;
+  --surface-2: #2a2633;
+  --text: #ece8f2;
+  --muted: #9a93a8;
+  --accent: #e07a9b;
+  --accent-text: #1a0f14;
+  --border: #353041;
+  --danger: #ff7b7b;
+  --radius: 14px;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f7f4f8; --surface: #ffffff; --surface-2: #f0ebf3; --text: #221d29;
+    --muted: #6f6680; --accent: #c4466f; --accent-text: #ffffff; --border: #e2dbe8;
+    --danger: #c0392b; color-scheme: light;
+  }
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.topbar {
+  display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+  padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--surface);
+}
+.brand { font-size: 1.1rem; margin: 0 8px 0 0; color: var(--accent); letter-spacing: .02em; }
+.status { margin-left: auto; color: var(--muted); font-size: .85rem; }
+.status.error { color: var(--danger); }
+
+select, button, textarea {
+  font: inherit; color: var(--text); background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: 10px;
+}
+select, button { padding: 6px 12px; cursor: pointer; }
+button:disabled { opacity: .5; cursor: not-allowed; }
+button[type="submit"] { background: var(--accent); color: var(--accent-text); border-color: transparent; font-weight: 600; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.messages {
+  overflow-y: auto; padding: 20px 16px; display: flex; flex-direction: column; gap: 12px;
+  max-width: 820px; width: 100%; margin: 0 auto;
+}
+.msg { max-width: 85%; padding: 10px 14px; border-radius: var(--radius); white-space: pre-wrap; overflow-wrap: anywhere; }
+.msg.assistant { align-self: flex-start; background: var(--surface); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
+.msg.user { align-self: flex-end; background: var(--accent); color: var(--accent-text); border-bottom-right-radius: 4px; }
+.msg .who { display: block; font-size: .75rem; font-weight: 600; opacity: .7; margin-bottom: 2px; }
+.msg em { color: var(--muted); }
+.msg.user em { color: inherit; opacity: .85; }
+.msg.pending::after { content: "▍"; animation: blink 1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+
+.composer {
+  display: flex; gap: 10px; padding: 12px 16px; border-top: 1px solid var(--border); background: var(--surface);
+  max-width: 820px; width: 100%; margin: 0 auto;
+}
+.composer textarea { flex: 1; resize: none; padding: 10px 12px; min-height: 48px; max-height: 40vh; }
+.actions { display: flex; gap: 8px; align-items: flex-end; }
+
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+
+@media (max-width: 560px) {
+  .msg { max-width: 95%; }
+  .status { width: 100%; margin-left: 0; }
+}
+@media (prefers-reduced-motion: reduce) { .msg.pending::after { animation: none; } }
+
+/* ---- Step 2: chat list + memory panel ------------------------------------ */
+#session-select { max-width: 240px; }
+button.danger:hover { border-color: var(--danger); color: var(--danger); }
+
+.memory-dialog {
+  width: min(680px, calc(100vw - 32px)); max-height: min(80vh, 760px);
+  padding: 0; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--surface); color: var(--text);
+}
+.memory-dialog::backdrop { background: rgb(0 0 0 / .5); }
+.memory-dialog section { padding: 4px 20px 16px; }
+.dialog-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 20px; border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; background: var(--surface);
+}
+.dialog-head h2 { margin: 0; font-size: 1.1rem; }
+.memory-dialog h3 { font-size: .95rem; margin: 14px 0 8px; }
+.memory-dialog small, .muted { color: var(--muted); font-weight: normal; }
+#memory-summary { white-space: pre-wrap; margin: 0 0 6px; }
+
+.memory-form { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+.memory-form input {
+  flex: 1; min-width: 180px; padding: 6px 10px; font: inherit; color: var(--text);
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px;
+}
+.memory-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.memory-list li {
+  display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px;
+  background: var(--surface-2); border-radius: 10px;
+}
+.memory-list .tag {
+  flex: none; font-size: .7rem; text-transform: uppercase; letter-spacing: .04em;
+  padding: 2px 6px; border-radius: 6px; border: 1px solid var(--border); color: var(--muted);
+}
+.memory-list .text { flex: 1; overflow-wrap: anywhere; }
+.memory-list button { padding: 2px 8px; font-size: .85rem; }
+
+/* ---- Step 3: voice ---------------------------------------------------------- */
+#mic.recording {
+  background: var(--danger); color: #fff; border-color: transparent;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+#voice-toggle[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+@keyframes pulse { 50% { opacity: .65; } }
+@media (prefers-reduced-motion: reduce) { #mic.recording { animation: none; } }
+
+/* ---- Step 4: photos ---------------------------------------------------------- */
+.photo-link { display: block; margin: 4px 0 8px; }
+.photo {
+  display: block; width: min(340px, 100%); height: auto; aspect-ratio: auto 832 / 1216; /* placeholder ratio until loaded */
+  object-fit: cover; border-radius: 10px; background: var(--surface-2);
+}
