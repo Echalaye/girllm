@@ -16,7 +16,13 @@ import type { GpuGate } from '../util/gpuGate.js';
 import type { ComfyClient } from './comfyClient.js';
 import type { ImageStore, StoredImage } from './imageStore.js';
 import { writePhotoIdea } from './photoPrompt.js';
-import { ADULT_POSITIVE_TERMS, assertSafe, cardStatesMinorAge, ImageRefusedError, MINOR_NEGATIVE_TERMS } from './safety.js';
+import {
+  ADULT_POSITIVE_TERMS,
+  assertSafe,
+  cardStatesMinorAge,
+  ImageRefusedError,
+  MINOR_NEGATIVE_TERMS,
+} from './safety.js';
 import { buildTxt2ImgWorkflow } from './workflow.js';
 
 /** Marks a user message that is a photo request (shown in the chat as "📷 …"). */
@@ -117,7 +123,9 @@ export class ImageService {
 
     // 3. Exclusive GPU phase.
     const png = await this.gate.runExclusive(async () => {
-      await this.llm.unload?.().catch((err: unknown) => this.log.warn({ err }, 'could not unload the LLM'));
+      await this.llm.unload?.().catch((err: unknown) => {
+        this.log.warn({ err }, 'could not unload the LLM');
+      });
       try {
         return await this.comfy.generate(
           buildTxt2ImgWorkflow({
@@ -136,7 +144,9 @@ export class ImageService {
         );
       } finally {
         // Give the VRAM back to the LLM even if generation failed.
-        await this.comfy.free().catch((err: unknown) => this.log.warn({ err }, 'could not free ComfyUI memory'));
+        await this.comfy.free().catch((err: unknown) => {
+          this.log.warn({ err }, 'could not free ComfyUI memory');
+        });
       }
     });
 
@@ -177,7 +187,11 @@ export class ImageService {
 
   async deleteFiles(paths: string[]): Promise<void> {
     await Promise.all(
-      paths.map((p) => rm(p, { force: true }).catch((err: unknown) => this.log.warn({ err, p }, 'could not delete image'))),
+      paths.map((p) =>
+        rm(p, { force: true }).catch((err: unknown) => {
+          this.log.warn({ err, p }, 'could not delete image');
+        }),
+      ),
     );
   }
 }

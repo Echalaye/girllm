@@ -52,9 +52,24 @@ export class ImageStore {
   }
 
   /** @param id pre-generated so the file can be written before the row. */
-  add(image: { id?: string; sessionId: string; fileName: string; scene: string; prompt: string; seed: number }): StoredImage {
+  add(image: {
+    id?: string;
+    sessionId: string;
+    fileName: string;
+    scene: string;
+    prompt: string;
+    seed: number;
+  }): StoredImage {
     const id = image.id ?? randomUUID();
-    this.stmt.insert!.run(id, image.sessionId, image.fileName, image.scene, image.prompt, image.seed, this.now().toISOString());
+    this.stmt.insert!.run(
+      id,
+      image.sessionId,
+      image.fileName,
+      image.scene,
+      image.prompt,
+      image.seed,
+      this.now().toISOString(),
+    );
     return this.get(id)!;
   }
 

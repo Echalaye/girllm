@@ -118,7 +118,9 @@ export class MemoryService {
     void this.queue.enqueue(
       session.characterId,
       () => this.runJobs(sessionId),
-      (err) => this.log.warn({ err, sessionId }, 'memory job failed'),
+      (err) => {
+        this.log.warn({ err, sessionId }, 'memory job failed');
+      },
     );
   }
 

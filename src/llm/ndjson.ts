@@ -2,7 +2,7 @@
  * Newline-delimited JSON stream parser (Ollama's native streaming format:
  * one JSON object per line). Handles lines split across network chunks.
  */
-export async function* parseNdjson(stream: AsyncIterable<Uint8Array>): AsyncGenerator<unknown> {
+export async function* parseNdjson(stream: AsyncIterable<Uint8Array>): AsyncGenerator {
   const decoder = new TextDecoder();
   let buffer = '';
 

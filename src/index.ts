@@ -33,7 +33,14 @@ async function main(): Promise<void> {
   const sessions = new SqliteSessionStore(db);
 
   // Temporary console logger until Fastify's (pino) logger exists.
-  const bootLog = { info: (m: string) => console.log(m), warn: (m: string) => console.warn(`WARN ${m}`) };
+  const bootLog = {
+    info: (m: string) => {
+      console.log(m);
+    },
+    warn: (m: string) => {
+      console.warn(`WARN ${m}`);
+    },
+  };
   const characters = await CharacterRepository.loadFromDirectory(config.charactersDir, bootLog);
 
   // Host header allow-list (anti DNS-rebinding). Add the LAN host when
@@ -45,31 +52,34 @@ async function main(): Promise<void> {
   // The memory service is created before Fastify (which owns the real
   // logger), so it gets a late-bound proxy that switches to app.log below.
   let log: { warn: (o: unknown, m?: string) => void; info: (o: unknown, m?: string) => void } = {
-    warn: (o, m) => console.warn(m ?? '', o),
-    info: (o, m) => console.log(m ?? '', o),
+    warn: (o, m) => {
+      console.warn(m ?? '', o);
+    },
+    info: (o, m) => {
+      console.log(m ?? '', o);
+    },
   };
-  const memoryLog = { warn: (o: unknown, m?: string) => log.warn(o, m), info: (o: unknown, m?: string) => log.info(o, m) };
+  const memoryLog = {
+    warn: (o: unknown, m?: string) => {
+      log.warn(o, m);
+    },
+    info: (o: unknown, m?: string) => {
+      log.info(o, m);
+    },
+  };
 
   const memoryStore = new MemoryStore(db);
   const memory = config.memory.enabled
-    ? new MemoryService(
-        sessions,
-        characters,
-        memoryStore,
-        llm,
-        embeddings,
-        memoryLog,
-        {
-          userName: config.userName,
-          replyLanguage: config.replyLanguage,
-          summaryPolicy: defaultSummaryPolicy(contextTokens, maxReplyTokens),
-          topK: config.memory.topK,
-          memoryTokenBudget: Math.floor(contextTokens * 0.1),
-          extractEvery: config.memory.extractEvery,
-          duplicateThreshold: 0.9,
-          minRelevance: 0.3,
-        },
-      )
+    ? new MemoryService(sessions, characters, memoryStore, llm, embeddings, memoryLog, {
+        userName: config.userName,
+        replyLanguage: config.replyLanguage,
+        summaryPolicy: defaultSummaryPolicy(contextTokens, maxReplyTokens),
+        topK: config.memory.topK,
+        memoryTokenBudget: Math.floor(contextTokens * 0.1),
+        extractEvery: config.memory.extractEvery,
+        duplicateThreshold: 0.9,
+        minRelevance: 0.3,
+      })
     : undefined;
 
   const { images: img } = config;
@@ -121,8 +131,18 @@ async function main(): Promise<void> {
   const { voice: v } = config;
   const voice: VoiceServices | undefined = v.enabled
     ? {
-        stt: new SherpaSpeechToText({ modelsDir: v.modelsDir, model: v.sttModel, language: v.sttLanguage, numThreads: v.threads }),
-        tts: new SherpaTextToSpeech({ modelsDir: v.modelsDir, voice: v.ttsVoice, speed: v.ttsSpeed, numThreads: v.threads }),
+        stt: new SherpaSpeechToText({
+          modelsDir: v.modelsDir,
+          model: v.sttModel,
+          language: v.sttLanguage,
+          numThreads: v.threads,
+        }),
+        tts: new SherpaTextToSpeech({
+          modelsDir: v.modelsDir,
+          voice: v.ttsVoice,
+          speed: v.ttsSpeed,
+          numThreads: v.threads,
+        }),
       }
     : undefined;
 
@@ -143,7 +163,9 @@ async function main(): Promise<void> {
   if (!isLoopbackHost(config.host)) {
     app.log.warn(`Listening on ${config.host}: the API has NO authentication. Only do this on a trusted network.`);
   }
-  app.log.info(`LLM: ${config.llm.model} via ${config.llm.provider} (${config.llm.baseUrl}), context ${contextTokens} tokens`);
+  app.log.info(
+    `LLM: ${config.llm.model} via ${config.llm.provider} (${config.llm.baseUrl}), context ${contextTokens} tokens`,
+  );
   app.log.info(`Database: ${config.databasePath}`);
   app.log.info(`Reply language: ${config.replyLanguage ?? 'not forced'}`);
   app.log.info(
@@ -155,7 +177,9 @@ async function main(): Promise<void> {
   if (voice) {
     const describe = (s: { available: boolean; model: string; reason?: string }) =>
       s.available ? s.model : `${s.model} — ${s.reason}`;
-    app.log.info(`Voice: speech-to-text ${describe(voice.stt.status())}, text-to-speech ${describe(voice.tts.status())}`);
+    app.log.info(
+      `Voice: speech-to-text ${describe(voice.stt.status())}, text-to-speech ${describe(voice.tts.status())}`,
+    );
   } else {
     app.log.info('Voice: off');
   }
@@ -173,7 +197,9 @@ async function main(): Promise<void> {
 
   const health = await llm.ping();
   if (!health.ok) {
-    app.log.warn(`LLM backend not reachable at ${config.llm.baseUrl} (${health.error}). Start Ollama, the app will keep running.`);
+    app.log.warn(
+      `LLM backend not reachable at ${config.llm.baseUrl} (${health.error}). Start Ollama, the app will keep running.`,
+    );
   } else if (health.models) {
     // Ollama lists models as "name:tag"; accept an implicit ":latest".
     const has = (name: string) => health.models!.some((m) => m === name || m === `${name}:latest`);
@@ -181,7 +207,9 @@ async function main(): Promise<void> {
       app.log.warn(`Model "${config.llm.model}" not found on the backend. Run: ollama pull ${config.llm.model}`);
     }
     if (config.memory.enabled && config.memory.embeddingModel && !has(config.memory.embeddingModel)) {
-      app.log.warn(`Embedding model "${config.memory.embeddingModel}" not found. Run: ollama pull ${config.memory.embeddingModel}`);
+      app.log.warn(
+        `Embedding model "${config.memory.embeddingModel}" not found. Run: ollama pull ${config.memory.embeddingModel}`,
+      );
     }
   }
 
@@ -197,8 +225,13 @@ async function main(): Promise<void> {
       app
         .close()
         .then(() => Promise.race([memory?.idle(), timeout]))
-        .then(() => db.close())
-        .then(() => process.exit(0), () => process.exit(1));
+        .then(() => {
+          db.close();
+        })
+        .then(
+          () => process.exit(0),
+          () => process.exit(1),
+        );
     });
   }
 
@@ -207,6 +240,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err: unknown) => {
-  console.error((err as Error).message ?? err);
+  console.error(err instanceof Error ? err.message : String(err));
   process.exit(1);
 });

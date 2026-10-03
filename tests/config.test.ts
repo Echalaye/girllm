@@ -37,7 +37,11 @@ describe('parseConfig memory settings', () => {
   });
 
   it('parses flags, disables embeddings when empty, and validates', () => {
-    const c = parseConfig({ MEMORY_ENABLED: 'FALSE', EMBEDDING_MODEL: '', EMBEDDING_BASE_URL: 'http://127.0.0.1:8081/' });
+    const c = parseConfig({
+      MEMORY_ENABLED: 'FALSE',
+      EMBEDDING_MODEL: '',
+      EMBEDDING_BASE_URL: 'http://127.0.0.1:8081/',
+    });
     expect(c.memory.enabled).toBe(false);
     expect(c.memory.embeddingModel).toBeUndefined();
     expect(c.memory.embeddingBaseUrl).toBe('http://127.0.0.1:8081');
@@ -54,7 +58,10 @@ describe('parseConfig LLM provider settings', () => {
   });
 
   it('validates provider and keep-alive', () => {
-    expect(parseConfig({ LLM_PROVIDER: 'openai', LLM_KEEP_ALIVE: '-1' }).llm).toMatchObject({ provider: 'openai', keepAlive: '-1' });
+    expect(parseConfig({ LLM_PROVIDER: 'openai', LLM_KEEP_ALIVE: '-1' }).llm).toMatchObject({
+      provider: 'openai',
+      keepAlive: '-1',
+    });
     expect(() => parseConfig({ LLM_PROVIDER: 'gpt' })).toThrow(/LLM_PROVIDER/);
     expect(() => parseConfig({ LLM_KEEP_ALIVE: 'forever' })).toThrow(/LLM_KEEP_ALIVE/);
   });
@@ -74,11 +81,13 @@ describe('parseConfig voice settings', () => {
   });
 
   it('validates model ids and language codes', () => {
-    expect(parseConfig({ STT_MODEL: 'whisper-small', TTS_VOICE: 'fr-pierre', STT_LANGUAGE: 'fr' }).voice).toMatchObject({
-      sttModel: 'whisper-small',
-      ttsVoice: 'fr-pierre',
-      sttLanguage: 'fr',
-    });
+    expect(parseConfig({ STT_MODEL: 'whisper-small', TTS_VOICE: 'fr-pierre', STT_LANGUAGE: 'fr' }).voice).toMatchObject(
+      {
+        sttModel: 'whisper-small',
+        ttsVoice: 'fr-pierre',
+        sttLanguage: 'fr',
+      },
+    );
     expect(() => parseConfig({ TTS_VOICE: 'siri' })).toThrow(/TTS_VOICE/);
     expect(() => parseConfig({ STT_LANGUAGE: 'french' })).toThrow(/STT_LANGUAGE/);
   });
@@ -87,12 +96,21 @@ describe('parseConfig voice settings', () => {
 describe('parseConfig image settings', () => {
   it('defaults to SDXL portrait settings with no checkpoint (photos unavailable)', () => {
     const c = parseConfig({});
-    expect(c.images).toMatchObject({ enabled: true, comfyUrl: 'http://127.0.0.1:8188', checkpoint: undefined, width: 832, height: 1216, steps: 25 });
+    expect(c.images).toMatchObject({
+      enabled: true,
+      comfyUrl: 'http://127.0.0.1:8188',
+      checkpoint: undefined,
+      width: 832,
+      height: 1216,
+      steps: 25,
+    });
     expect(c.images.dir.replace(/\\/g, '/')).toBe('data/images');
   });
 
   it('validates sizes and checkpoint names', () => {
-    expect(parseConfig({ IMAGE_CHECKPOINT: 'SDXL/juggernaut v9 (fp16).safetensors' }).images.checkpoint).toBe('SDXL/juggernaut v9 (fp16).safetensors');
+    expect(parseConfig({ IMAGE_CHECKPOINT: 'SDXL/juggernaut v9 (fp16).safetensors' }).images.checkpoint).toBe(
+      'SDXL/juggernaut v9 (fp16).safetensors',
+    );
     expect(() => parseConfig({ IMAGE_WIDTH: '900' })).toThrow(/IMAGE_WIDTH/); // not a multiple of 8
     expect(() => parseConfig({ IMAGE_CHECKPOINT: 'x"; rm -rf' })).toThrow(/IMAGE_CHECKPOINT/);
   });

@@ -7,7 +7,8 @@ Nothing leaves your machine: the model runs on your GPU through [Ollama](https:/
 > **Status: all 4 steps done.** Streaming chat with characters, long-term memory, voice (talk and hear her
 > answer), and photos generated on demand, all offline. See the [roadmap](#roadmap).
 
-![stack](https://img.shields.io/badge/Node-22-339933) ![ts](https://img.shields.io/badge/TypeScript-strict-3178c6)
+[![CI](https://github.com/Echalaye/girllm/actions/workflows/ci.yml/badge.svg)](https://github.com/Echalaye/girllm/actions/workflows/ci.yml)
+![node](https://img.shields.io/badge/Node-22%20%7C%2024-339933) ![ts](https://img.shields.io/badge/TypeScript-strict-3178c6)
 
 ---
 
@@ -56,11 +57,11 @@ Nothing leaves your machine: the model runs on your GPU through [Ollama](https:/
 
 ## Requirements
 
-| What | Version | Notes |
-|---|---|---|
-| Node.js | **≥ 22.13** | `node -v`. Needed for the built-in `node:sqlite` module (no native build tools needed) |
-| Ollama | recent release | **Required for the RTX 5060 (Blackwell)**: old builds lack CUDA 12.8 / `sm_120` and silently run on the CPU |
-| GPU | 8 GB VRAM | Tested target: RTX 5060 8 GB |
+| What    | Version        | Notes                                                                                                       |
+| ------- | -------------- | ----------------------------------------------------------------------------------------------------------- |
+| Node.js | **≥ 22.13**    | `node -v`. Needed for the built-in `node:sqlite` module (no native build tools needed)                      |
+| Ollama  | recent release | **Required for the RTX 5060 (Blackwell)**: old builds lack CUDA 12.8 / `sm_120` and silently run on the CPU |
+| GPU     | 8 GB VRAM      | Tested target: RTX 5060 8 GB                                                                                |
 
 ---
 
@@ -71,10 +72,10 @@ Nothing leaves your machine: the model runs on your GPU through [Ollama](https:/
 Set these **user environment variables** (Settings → System → About → Advanced system settings →
 Environment Variables), then **restart Ollama** (quit it from the tray icon and relaunch):
 
-| Variable | Value | Why |
-|---|---|---|
-| `OLLAMA_FLASH_ATTENTION` | `1` | Less VRAM, faster |
-| `OLLAMA_KV_CACHE_TYPE` | `q8_0` | Halves the context's VRAM cost with a negligible quality loss |
+| Variable                 | Value  | Why                                                           |
+| ------------------------ | ------ | ------------------------------------------------------------- |
+| `OLLAMA_FLASH_ATTENTION` | `1`    | Less VRAM, faster                                             |
+| `OLLAMA_KV_CACHE_TYPE`   | `q8_0` | Halves the context's VRAM cost with a negligible quality loss |
 
 You don't need `OLLAMA_CONTEXT_LENGTH`: with `LLM_PROVIDER=ollama` (the default) the app sends the context size
 (`CONTEXT_TOKENS`) with every request.
@@ -98,6 +99,15 @@ npm run dev                 # hot reload, or: npm run build ; npm start
 
 Open **http://127.0.0.1:3210**.
 
+**Every day after that: double-click `start.bat`.** It:
+
+1. starts **Ollama** if it isn't running yet;
+2. starts **ComfyUI** if photos are configured and `COMFYUI_DIR` is set (its log goes to `data\logs\comfyui.log`);
+3. rebuilds girllm if the code changed, starts it, and opens the browser.
+
+`Ctrl+C` in its window stops everything **it** started. Services that were already running are left alone.
+`start.bat --no-browser` skips opening the browser.
+
 ### 2b. Optional: photos with ComfyUI
 
 1. Download the latest **ComfyUI portable for Windows (NVIDIA)** from the ComfyUI GitHub releases and extract it.
@@ -105,7 +115,8 @@ Open **http://127.0.0.1:3210**.
    the GPU.
 2. Put an **SDXL checkpoint** (`.safetensors` only) in `ComfyUI\models\checkpoints\`: the official SDXL base 1.0,
    or a realistic SDXL fine-tune for more natural photos.
-3. Start ComfyUI with `run_nvidia_gpu.bat`. It listens on `http://127.0.0.1:8188`.
+3. Start ComfyUI with `run_nvidia_gpu.bat`. It listens on `http://127.0.0.1:8188`. Or let `start.bat` do it: set
+   `COMFYUI_DIR=C:\path\to\ComfyUI_windows_portable` in `.env`.
 4. In `.env`, set `IMAGE_CHECKPOINT=` to the file name exactly as it appears in ComfyUI, then restart girllm.
    The startup log should say `Photos: on`. If not, it says why (ComfyUI not reachable, checkpoint not found…).
 
@@ -129,10 +140,10 @@ In that case, lower `CONTEXT_TOKENS` (e.g. 6144), use a smaller quantization
 
 ## Choosing a model (8 GB VRAM)
 
-| Size | Quantization | Context | Notes |
-|---|---|---|---|
-| 12B (Mistral Nemo family) | Q4_K_M / IQ4_XS | 6–8k | Best quality for roleplay. Fits tightly |
-| 7–8B (Llama 3.1, Qwen) | Q5_K_M / Q6_K | 12–16k | Faster, longer context, decent French |
+| Size                      | Quantization    | Context | Notes                                   |
+| ------------------------- | --------------- | ------- | --------------------------------------- |
+| 12B (Mistral Nemo family) | Q4_K_M / IQ4_XS | 6–8k    | Best quality for roleplay. Fits tightly |
+| 7–8B (Llama 3.1, Qwen)    | Q5_K_M / Q6_K   | 12–16k  | Faster, longer context, decent French   |
 
 Roleplay fine-tunes of these models (on Hugging Face, in GGUF format) are usually much better than the
 base instruct models. Ollama can pull them directly:
@@ -152,14 +163,14 @@ Drop `.json` or `.png` character cards into `characters/` and restart. An exampl
 Supported macros in card fields: `{{char}}`, `{{user}}` (and the legacy `<BOT>` / `<USER>`).
 Your name comes from `USER_NAME` in `.env`.
 
-| Card field | Used for |
-|---|---|
-| `system_prompt` | Replaces the default instructions (if not empty) |
-| `description`, `personality`, `scenario` | Character definition in the system prompt |
-| `mes_example` | Example dialogue (style reference). Blocks separated by `<START>` |
-| `first_mes` | Greeting that opens every new chat |
-| `post_history_instructions` | Reminder injected after the history (strong steering) |
-| `extensions.girllm.appearance` | Fixed look used for **every photo** (image-prompt tags): `"woman, 26 years old, shoulder-length wavy auburn hair, green eyes, …"`. Without it, the LLM improvises the look from the description, which varies between photos |
+| Card field                               | Used for                                                                                                                                                                                                                     |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `system_prompt`                          | Replaces the default instructions (if not empty)                                                                                                                                                                             |
+| `description`, `personality`, `scenario` | Character definition in the system prompt                                                                                                                                                                                    |
+| `mes_example`                            | Example dialogue (style reference). Blocks separated by `<START>`                                                                                                                                                            |
+| `first_mes`                              | Greeting that opens every new chat                                                                                                                                                                                           |
+| `post_history_instructions`              | Reminder injected after the history (strong steering)                                                                                                                                                                        |
+| `extensions.girllm.appearance`           | Fixed look used for **every photo** (image-prompt tags): `"woman, 26 years old, shoulder-length wavy auburn hair, green eyes, …"`. Without it, the LLM improvises the look from the description, which varies between photos |
 
 All characters must be adults. The default system prompt states it explicitly, and photos are refused for a card
 that states an age under 18.
@@ -178,45 +189,46 @@ Mistral Nemo-based models (Mistral AI is French) and Qwen models handle French w
 
 ## Configuration (`.env`)
 
-| Variable | Default | Description |
-|---|---|---|
-| `HOST` | `127.0.0.1` | Keep loopback: the API has **no authentication** |
-| `PORT` | `3210` | |
-| `LLM_PROVIDER` | `ollama` | `ollama` = native Ollama API (recommended). `openai` = any OpenAI-compatible server (llama.cpp, KoboldCpp, LM Studio) |
-| `LLM_BASE_URL` | `http://127.0.0.1:11434` | Base URL **without** `/v1` |
-| `LLM_KEEP_ALIVE` | `30m` | How long Ollama keeps the model in VRAM after the last request (`2h`, `-1` = forever) |
-| `LLM_MODEL` | `mistral-nemo:12b-instruct-2407-q4_K_M` | Model name as known by the backend |
-| `LLM_API_KEY` | *(empty)* | Only for backends requiring one |
-| `CONTEXT_TOKENS` | `8192` | Context window. Applied automatically with `ollama`; with `openai` it must match the backend |
-| `MAX_REPLY_TOKENS` | `400` | Max reply length |
-| `TEMPERATURE` / `TOP_P` | `0.7` / `0.95` | Sampling. Lower temperature = more coherent |
-| `MIN_P` | `0.05` | Drops very unlikely tokens: the best guard against incoherent tangents |
-| `REPEAT_PENALTY` | `1.1` | `>1` discourages repetition |
-| `CHARACTERS_DIR` | `./characters` | |
-| `USER_NAME` | `User` | Your name in the story |
-| `REPLY_LANGUAGE` | *(empty)* | Force the reply language, e.g. `French`. Letters only. Empty = no constraint |
-| `DATA_DIR` | `./data` | Where `girllm.db` (chats + memories) is stored. Git-ignored |
-| `MEMORY_ENABLED` | `true` | `false` = step 1 behaviour (chats are still saved) |
-| `EMBEDDING_MODEL` | `paraphrase-multilingual` | Embedding model for memory search. Empty = memories picked by recency only |
-| `EMBEDDING_BASE_URL` | = `LLM_BASE_URL` | Backend serving the embedding model |
-| `MEMORY_TOP_K` | `8` | Max memories injected per reply |
-| `MEMORY_EXTRACT_EVERY` | `4` | Facts are extracted once this many new messages are pending |
-| `VOICE_ENABLED` | `true` | Voice buttons only appear for the models that are installed |
-| `MODELS_DIR` | `./models` | Where `npm run setup:voice` puts the voice models. Git-ignored |
-| `STT_MODEL` | `whisper-base` | `whisper-tiny`, `whisper-base`, `whisper-small` (more accurate, ~3× slower) |
-| `STT_LANGUAGE` | *(empty = auto)* | The language you speak, e.g. `fr`. Setting it avoids misdetections on short sentences |
-| `TTS_VOICE` | `fr-siwis` | `fr-siwis`, `fr-jessica` (female), `fr-pierre`, `fr-tom` (male), `en-amy` |
-| `TTS_SPEED` | `1` | `0.5`–`2` |
-| `VOICE_THREADS` | `4` | CPU threads per voice engine |
-| `IMAGES_ENABLED` | `true` | Shows the 📷 button (it explains why if ComfyUI isn't ready) |
-| `COMFYUI_URL` | `http://127.0.0.1:8188` | |
-| `IMAGE_CHECKPOINT` | *(empty = no photos)* | SDXL checkpoint file name, as listed by ComfyUI |
-| `IMAGE_WIDTH` / `IMAGE_HEIGHT` | `832` / `1216` | Multiples of 8. SDXL works best around 1 megapixel |
-| `IMAGE_STEPS` / `IMAGE_CFG` | `25` / `5.5` | |
-| `IMAGE_SAMPLER` / `IMAGE_SCHEDULER` | `dpmpp_2m` / `karras` | ComfyUI names |
-| `IMAGE_STYLE` | `photograph, realistic, …` | Tags added to every photo, e.g. `anime style, cel shading` |
-| `IMAGE_NEGATIVE_PROMPT` | `lowres, blurry, …` | Child-related terms are always added on top, whatever you set |
-| `LOG_LEVEL` | `info` | `debug`, `info`, `warn`… |
+| Variable                            | Default                                 | Description                                                                                                           |
+| ----------------------------------- | --------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `HOST`                              | `127.0.0.1`                             | Keep loopback: the API has **no authentication**                                                                      |
+| `PORT`                              | `3210`                                  |                                                                                                                       |
+| `LLM_PROVIDER`                      | `ollama`                                | `ollama` = native Ollama API (recommended). `openai` = any OpenAI-compatible server (llama.cpp, KoboldCpp, LM Studio) |
+| `LLM_BASE_URL`                      | `http://127.0.0.1:11434`                | Base URL **without** `/v1`                                                                                            |
+| `LLM_KEEP_ALIVE`                    | `30m`                                   | How long Ollama keeps the model in VRAM after the last request (`2h`, `-1` = forever)                                 |
+| `LLM_MODEL`                         | `mistral-nemo:12b-instruct-2407-q4_K_M` | Model name as known by the backend                                                                                    |
+| `LLM_API_KEY`                       | _(empty)_                               | Only for backends requiring one                                                                                       |
+| `CONTEXT_TOKENS`                    | `8192`                                  | Context window. Applied automatically with `ollama`; with `openai` it must match the backend                          |
+| `MAX_REPLY_TOKENS`                  | `400`                                   | Max reply length                                                                                                      |
+| `TEMPERATURE` / `TOP_P`             | `0.7` / `0.95`                          | Sampling. Lower temperature = more coherent                                                                           |
+| `MIN_P`                             | `0.05`                                  | Drops very unlikely tokens: the best guard against incoherent tangents                                                |
+| `REPEAT_PENALTY`                    | `1.1`                                   | `>1` discourages repetition                                                                                           |
+| `CHARACTERS_DIR`                    | `./characters`                          |                                                                                                                       |
+| `USER_NAME`                         | `User`                                  | Your name in the story                                                                                                |
+| `REPLY_LANGUAGE`                    | _(empty)_                               | Force the reply language, e.g. `French`. Letters only. Empty = no constraint                                          |
+| `DATA_DIR`                          | `./data`                                | Where `girllm.db` (chats + memories) is stored. Git-ignored                                                           |
+| `MEMORY_ENABLED`                    | `true`                                  | `false` = step 1 behaviour (chats are still saved)                                                                    |
+| `EMBEDDING_MODEL`                   | `paraphrase-multilingual`               | Embedding model for memory search. Empty = memories picked by recency only                                            |
+| `EMBEDDING_BASE_URL`                | = `LLM_BASE_URL`                        | Backend serving the embedding model                                                                                   |
+| `MEMORY_TOP_K`                      | `8`                                     | Max memories injected per reply                                                                                       |
+| `MEMORY_EXTRACT_EVERY`              | `4`                                     | Facts are extracted once this many new messages are pending                                                           |
+| `VOICE_ENABLED`                     | `true`                                  | Voice buttons only appear for the models that are installed                                                           |
+| `MODELS_DIR`                        | `./models`                              | Where `npm run setup:voice` puts the voice models. Git-ignored                                                        |
+| `STT_MODEL`                         | `whisper-base`                          | `whisper-tiny`, `whisper-base`, `whisper-small` (more accurate, ~3× slower)                                           |
+| `STT_LANGUAGE`                      | _(empty = auto)_                        | The language you speak, e.g. `fr`. Setting it avoids misdetections on short sentences                                 |
+| `TTS_VOICE`                         | `fr-siwis`                              | `fr-siwis`, `fr-jessica` (female), `fr-pierre`, `fr-tom` (male), `en-amy`                                             |
+| `TTS_SPEED`                         | `1`                                     | `0.5`–`2`                                                                                                             |
+| `VOICE_THREADS`                     | `4`                                     | CPU threads per voice engine                                                                                          |
+| `IMAGES_ENABLED`                    | `true`                                  | Shows the 📷 button (it explains why if ComfyUI isn't ready)                                                          |
+| `COMFYUI_DIR`                       | _(empty)_                               | ComfyUI install folder, so `start.bat` can start it. Only used by the launcher                                        |
+| `COMFYUI_URL`                       | `http://127.0.0.1:8188`                 |                                                                                                                       |
+| `IMAGE_CHECKPOINT`                  | _(empty = no photos)_                   | SDXL checkpoint file name, as listed by ComfyUI                                                                       |
+| `IMAGE_WIDTH` / `IMAGE_HEIGHT`      | `832` / `1216`                          | Multiples of 8. SDXL works best around 1 megapixel                                                                    |
+| `IMAGE_STEPS` / `IMAGE_CFG`         | `25` / `5.5`                            |                                                                                                                       |
+| `IMAGE_SAMPLER` / `IMAGE_SCHEDULER` | `dpmpp_2m` / `karras`                   | ComfyUI names                                                                                                         |
+| `IMAGE_STYLE`                       | `photograph, realistic, …`              | Tags added to every photo, e.g. `anime style, cel shading`                                                            |
+| `IMAGE_NEGATIVE_PROMPT`             | `lowres, blurry, …`                     | Child-related terms are always added on top, whatever you set                                                         |
+| `LOG_LEVEL`                         | `info`                                  | `debug`, `info`, `warn`…                                                                                              |
 
 Invalid values stop the app at startup with an explicit message.
 
@@ -224,13 +236,21 @@ Invalid values stop the app at startup with an explicit message.
 
 ## Scripts
 
-| Command | Description |
-|---|---|
-| `npm run dev` | Start with hot reload (tsx) |
-| `npm run setup:voice` | Download the voice models chosen in `.env`. `-- --list` shows all of them, `-- fr-tom whisper-small` installs specific ones |
-| `npm run build` / `npm start` | Compile to `dist/` and run |
-| `npm run typecheck` | TypeScript strict check |
-| `npm test` | Unit + HTTP tests (Vitest), no GPU needed |
+| Command                           | Description                                                                                                                 |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `start.bat`                       | One-click launcher: Ollama + ComfyUI + girllm + browser (Windows)                                                           |
+| `npm run launch`                  | Same launcher, any OS (`-- --no-browser` to skip the browser)                                                               |
+| `npm run dev`                     | Start with hot reload (tsx)                                                                                                 |
+| `npm run setup:voice`             | Download the voice models chosen in `.env`. `-- --list` shows all of them, `-- fr-tom whisper-small` installs specific ones |
+| `npm run build` / `npm start`     | Compile to `dist/` and run                                                                                                  |
+| `npm run typecheck`               | TypeScript strict check                                                                                                     |
+| `npm test`                        | Unit + HTTP tests (Vitest), no GPU needed                                                                                   |
+| `npm run lint` / `lint:fix`       | ESLint (type-aware `typescript-eslint` strict rules)                                                                        |
+| `npm run format` / `format:check` | Prettier                                                                                                                    |
+| `npm run check`                   | Everything CI runs: format check, lint, types, tests                                                                        |
+
+**CI**: GitHub Actions (`.github/workflows/ci.yml`) runs formatting, lint, type check, tests and build on Node 22 and 24
+for every push and pull request. No GPU or model is needed: the LLM, ComfyUI and voice engines are mocked in the tests.
 
 ---
 
@@ -254,6 +274,7 @@ Invalid values stop the app at startup with an explicit message.
   - every prompt starts with `adult`, and child-related terms are always added to the negative prompt.
 
   The check is deliberately strict: an occasional false positive just means rephrasing the request.
+
 - Generated images are stored in `data/images/` (git-ignored) and deleted along with their chat. They're served by
   id only, with the file path taken from the database and never from the URL.
 

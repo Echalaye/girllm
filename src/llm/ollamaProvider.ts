@@ -47,7 +47,9 @@ export class OllamaProvider implements LlmProvider {
   async *streamChat(messages: ChatMessage[], options: GenerationOptions): AsyncGenerator<string> {
     // Only the wait for response headers is time-limited, never the generation.
     const connectTimeout = new AbortController();
-    const timer = setTimeout(() => connectTimeout.abort(new Error('LLM backend connect timeout')), this.connectTimeoutMs);
+    const timer = setTimeout(() => {
+      connectTimeout.abort(new Error('LLM backend connect timeout'));
+    }, this.connectTimeoutMs);
     const signal = options.signal ? AbortSignal.any([options.signal, connectTimeout.signal]) : connectTimeout.signal;
 
     let response: Response;

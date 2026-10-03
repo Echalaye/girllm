@@ -132,9 +132,12 @@ export class ComfyClient {
     }
   }
 
-  private async download(image: { filename: string; subfolder: string; type: string }, signal: AbortSignal): Promise<Buffer> {
+  private async download(
+    image: { filename: string; subfolder: string; type: string },
+    signal: AbortSignal,
+  ): Promise<Buffer> {
     const query = new URLSearchParams({ filename: image.filename, subfolder: image.subfolder, type: image.type });
-    const res = await this.fetchImpl(`${this.opts.baseUrl}/view?${query}`, { signal });
+    const res = await this.fetchImpl(`${this.opts.baseUrl}/view?${query.toString()}`, { signal });
     if (!res.ok) throw new ComfyError(`Cannot download the image (${res.status})`);
     const bytes = Buffer.from(await res.arrayBuffer());
     if (bytes.length > MAX_IMAGE_BYTES || !bytes.subarray(0, 8).equals(PNG_SIGNATURE)) {

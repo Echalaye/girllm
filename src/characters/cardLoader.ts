@@ -82,7 +82,7 @@ export function extractCardJsonFromPng(png: Buffer): string {
 export function parseCardObject(raw: unknown): CardFields {
   // V3 cards keep a V2-compatible `data` object: validate it as V2.
   if (raw && typeof raw === 'object' && (raw as { spec?: unknown }).spec === 'chara_card_v3') {
-    raw = { ...(raw as object), spec: 'chara_card_v2' };
+    raw = { ...raw, spec: 'chara_card_v2' };
   }
   const v2 = CardV2Schema.safeParse(raw);
   if (v2.success) return v2.data.data;

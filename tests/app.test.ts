@@ -48,10 +48,13 @@ async function makeApp(withVoice = false) {
 }
 
 afterEach(async () => {
-  await app?.close();
+  await app.close();
 });
 
-const json = (body: unknown) => ({ headers: { host: HOST, 'content-type': 'application/json' }, payload: JSON.stringify(body) });
+const json = (body: unknown) => ({
+  headers: { host: HOST, 'content-type': 'application/json' },
+  payload: JSON.stringify(body),
+});
 
 describe('HTTP API', () => {
   it('rejects foreign Host headers (DNS rebinding)', async () => {
@@ -62,7 +65,12 @@ describe('HTTP API', () => {
 
   it('rejects cross-origin requests', async () => {
     await makeApp();
-    const res = await app.inject({ method: 'POST', url: '/api/sessions', ...json({ characterId: 'aria' }), headers: { host: HOST, origin: 'https://evil.example', 'content-type': 'application/json' } });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      ...json({ characterId: 'aria' }),
+      headers: { host: HOST, origin: 'https://evil.example', 'content-type': 'application/json' },
+    });
     expect(res.statusCode).toBe(403);
   });
 
@@ -81,9 +89,15 @@ describe('HTTP API', () => {
 
   it('validates input', async () => {
     await makeApp();
-    expect((await app.inject({ method: 'POST', url: '/api/sessions', ...json({ characterId: '../etc' }) })).statusCode).toBe(400);
-    expect((await app.inject({ method: 'POST', url: '/api/sessions', ...json({ characterId: 'ghost' }) })).statusCode).toBe(404);
-    expect((await app.inject({ method: 'GET', url: '/api/sessions/not-a-uuid', headers: { host: HOST } })).statusCode).toBe(400);
+    expect(
+      (await app.inject({ method: 'POST', url: '/api/sessions', ...json({ characterId: '../etc' }) })).statusCode,
+    ).toBe(400);
+    expect(
+      (await app.inject({ method: 'POST', url: '/api/sessions', ...json({ characterId: 'ghost' }) })).statusCode,
+    ).toBe(404);
+    expect(
+      (await app.inject({ method: 'GET', url: '/api/sessions/not-a-uuid', headers: { host: HOST } })).statusCode,
+    ).toBe(400);
   });
 
   it('creates a session and streams a reply as SSE', async () => {
@@ -93,10 +107,18 @@ describe('HTTP API', () => {
     const { session } = created.json();
     expect(session.messages[0].content).toBe('Hi Etienne!'); // macros resolved in the greeting
 
-    const empty = await app.inject({ method: 'POST', url: `/api/sessions/${session.id}/messages`, ...json({ text: '   ' }) });
+    const empty = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${session.id}/messages`,
+      ...json({ text: '   ' }),
+    });
     expect(empty.statusCode).toBe(400);
 
-    const res = await app.inject({ method: 'POST', url: `/api/sessions/${session.id}/messages`, ...json({ text: 'Hello' }) });
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${session.id}/messages`,
+      ...json({ text: 'Hello' }),
+    });
     expect(res.headers['content-type']).toContain('text/event-stream');
     expect(res.body).toContain('event: token\ndata: {"text":"Hi"}');
     expect(res.body).toContain('event: done');
@@ -109,7 +131,9 @@ describe('HTTP API', () => {
 describe('HTTP API - chats and memories', () => {
   it('lists and deletes chats', async () => {
     await makeApp();
-    const { session } = (await app.inject({ method: 'POST', url: '/api/sessions', ...json({ characterId: 'aria' }) })).json();
+    const { session } = (
+      await app.inject({ method: 'POST', url: '/api/sessions', ...json({ characterId: 'aria' }) })
+    ).json();
     const list = await app.inject({ method: 'GET', url: '/api/characters/aria/sessions', headers: { host: HOST } });
     expect(list.json()).toHaveLength(1);
     const del = await app.inject({ method: 'DELETE', url: `/api/sessions/${session.id}`, headers: { host: HOST } });
@@ -126,10 +150,16 @@ describe('HTTP API - chats and memories', () => {
       ...json({ category: 'user', content: 'Etienne loves climbing' }),
     });
     expect(created.statusCode).toBe(201);
-    const list = (await app.inject({ method: 'GET', url: '/api/characters/aria/memories', headers: { host: HOST } })).json();
+    const list = (
+      await app.inject({ method: 'GET', url: '/api/characters/aria/memories', headers: { host: HOST } })
+    ).json();
     expect(list).toMatchObject([{ category: 'user', content: 'Etienne loves climbing' }]);
 
-    const bad = await app.inject({ method: 'POST', url: '/api/characters/aria/memories', ...json({ category: 'admin', content: 'x' }) });
+    const bad = await app.inject({
+      method: 'POST',
+      url: '/api/characters/aria/memories',
+      ...json({ category: 'admin', content: 'x' }),
+    });
     expect(bad.statusCode).toBe(400);
     const ghost = await app.inject({ method: 'GET', url: '/api/characters/ghost/memories', headers: { host: HOST } });
     expect(ghost.statusCode).toBe(404);
@@ -170,7 +200,9 @@ describe('HTTP API - voice', () => {
     expect(res.rawPayload.toString('ascii', 0, 4)).toBe('RIFF');
     expect(fakeVoice.tts.lastText).toBe('Coucou');
     expect((await app.inject({ method: 'POST', url: '/api/tts', ...json({ text: '*sourit*' }) })).statusCode).toBe(204);
-    expect((await app.inject({ method: 'POST', url: '/api/tts', ...json({ text: 'a'.repeat(1001) }) })).statusCode).toBe(400);
+    expect(
+      (await app.inject({ method: 'POST', url: '/api/tts', ...json({ text: 'a'.repeat(1001) }) })).statusCode,
+    ).toBe(400);
   });
 
   it('allows blob: media in the CSP for audio playback', async () => {
@@ -195,22 +227,65 @@ describe('HTTP API - photos', () => {
     const characters = CharacterRepository.fromCharacters([makeCharacter({ appearance: 'woman, 26 years old' })]);
     const { db, store } = makeStore();
     const comfy = new FakeComfy();
-    const images = new ImageService(store, characters, new ImageStore(db), llm, new ComfyClient({ baseUrl: 'http://comfy', pollIntervalMs: 1, fetchImpl: comfy.fetch }), new GpuGate(), { warn: () => {}, info: () => {} }, {
+    const images = new ImageService(
+      store,
+      characters,
+      new ImageStore(db),
+      llm,
+      new ComfyClient({ baseUrl: 'http://comfy', pollIntervalMs: 1, fetchImpl: comfy.fetch }),
+      new GpuGate(),
+      { warn: () => {}, info: () => {} },
+      {
+        userName: 'Etienne',
+        imagesDir: await mkdtemp(join(tmpdir(), 'girllm-http-img-')),
+        settings: {
+          checkpoint: 'sdxl.safetensors',
+          width: 832,
+          height: 1216,
+          steps: 20,
+          cfg: 5,
+          sampler: 'dpmpp_2m',
+          scheduler: 'karras',
+          style: '',
+          negative: '',
+        },
+      },
+    );
+    const chat = new ChatService(
+      characters,
+      store,
+      llm,
+      { userName: 'Etienne', budget: { contextTokens: 4096, maxReplyTokens: 200 }, temperature: 0.8, topP: 0.9 },
+      undefined,
+      images,
+    );
+    app = await buildApp({
+      chat,
+      characters,
+      llm,
+      memoryStore: new MemoryStore(db),
+      images,
+      allowedHosts: [HOST],
       userName: 'Etienne',
-      imagesDir: await mkdtemp(join(tmpdir(), 'girllm-http-img-')),
-      settings: { checkpoint: 'sdxl.safetensors', width: 832, height: 1216, steps: 20, cfg: 5, sampler: 'dpmpp_2m', scheduler: 'karras', style: '', negative: '' },
     });
-    const chat = new ChatService(characters, store, llm, { userName: 'Etienne', budget: { contextTokens: 4096, maxReplyTokens: 200 }, temperature: 0.8, topP: 0.9 }, undefined, images);
-    app = await buildApp({ chat, characters, llm, memoryStore: new MemoryStore(db), images, allowedHosts: [HOST], userName: 'Etienne' });
     return app;
   }
 
   it('reports status, generates a photo and serves it', async () => {
     await makePhotoApp();
-    expect((await app.inject({ method: 'GET', url: '/api/images/status', headers: { host: HOST } })).json()).toEqual({ available: true, checkpoint: 'sdxl.safetensors' });
+    expect((await app.inject({ method: 'GET', url: '/api/images/status', headers: { host: HOST } })).json()).toEqual({
+      available: true,
+      checkpoint: 'sdxl.safetensors',
+    });
 
-    const { session } = (await app.inject({ method: 'POST', url: '/api/sessions', ...json({ characterId: 'aria' }) })).json();
-    const res = await app.inject({ method: 'POST', url: `/api/sessions/${session.id}/photo`, ...json({ request: 'selfie at the beach' }) });
+    const { session } = (
+      await app.inject({ method: 'POST', url: '/api/sessions', ...json({ characterId: 'aria' }) })
+    ).json();
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${session.id}/photo`,
+      ...json({ request: 'selfie at the beach' }),
+    });
     expect(res.statusCode).toBe(200);
     const { message } = res.json();
     expect(message).toMatchObject({ role: 'assistant', content: '*sourit* Voilà !' });
@@ -219,25 +294,51 @@ describe('HTTP API - photos', () => {
     expect(img.headers['content-type']).toBe('image/png');
     expect(img.rawPayload.subarray(1, 4).toString()).toBe('PNG');
 
-    const reloaded = (await app.inject({ method: 'GET', url: `/api/sessions/${session.id}`, headers: { host: HOST } })).json();
+    const reloaded = (
+      await app.inject({ method: 'GET', url: `/api/sessions/${session.id}`, headers: { host: HOST } })
+    ).json();
     expect(reloaded.session.messages.at(-1).imageId).toBe(message.imageId);
   });
 
   it('validates ids, refuses unsafe requests and reports disabled photos', async () => {
     await makePhotoApp();
-    expect((await app.inject({ method: 'GET', url: '/api/images/../../etc/passwd', headers: { host: HOST } })).statusCode).toBe(404);
-    expect((await app.inject({ method: 'GET', url: '/api/images/not-a-uuid', headers: { host: HOST } })).statusCode).toBe(400);
-    expect((await app.inject({ method: 'GET', url: '/api/images/00000000-0000-4000-8000-000000000000', headers: { host: HOST } })).statusCode).toBe(404);
+    expect(
+      (await app.inject({ method: 'GET', url: '/api/images/../../etc/passwd', headers: { host: HOST } })).statusCode,
+    ).toBe(404);
+    expect(
+      (await app.inject({ method: 'GET', url: '/api/images/not-a-uuid', headers: { host: HOST } })).statusCode,
+    ).toBe(400);
+    expect(
+      (
+        await app.inject({
+          method: 'GET',
+          url: '/api/images/00000000-0000-4000-8000-000000000000',
+          headers: { host: HOST },
+        })
+      ).statusCode,
+    ).toBe(404);
 
-    const { session } = (await app.inject({ method: 'POST', url: '/api/sessions', ...json({ characterId: 'aria' }) })).json();
-    const refused = await app.inject({ method: 'POST', url: `/api/sessions/${session.id}/photo`, ...json({ request: 'as a schoolgirl' }) });
+    const { session } = (
+      await app.inject({ method: 'POST', url: '/api/sessions', ...json({ characterId: 'aria' }) })
+    ).json();
+    const refused = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${session.id}/photo`,
+      ...json({ request: 'as a schoolgirl' }),
+    });
     expect(refused.statusCode).toBe(422);
     expect(refused.json().error).toBe("This photo can't be generated.");
-    const tooLong = await app.inject({ method: 'POST', url: `/api/sessions/${session.id}/photo`, ...json({ request: 'x'.repeat(301) }) });
+    const tooLong = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${session.id}/photo`,
+      ...json({ request: 'x'.repeat(301) }),
+    });
     expect(tooLong.statusCode).toBe(400);
     await app.close();
 
     await makeApp();
-    expect((await app.inject({ method: 'GET', url: '/api/images/status', headers: { host: HOST } })).json().reason).toMatch(/^disabled/);
+    expect(
+      (await app.inject({ method: 'GET', url: '/api/images/status', headers: { host: HOST } })).json().reason,
+    ).toMatch(/^disabled/);
   });
 });

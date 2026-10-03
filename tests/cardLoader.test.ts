@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { extractCardJsonFromPng, loadCardFile, parseCardObject, slugify } from '../src/characters/cardLoader.js';
 import { CharacterRepository } from '../src/characters/characterRepository.js';
+import { cardStatesMinorAge, mentionsMinor } from '../src/images/safety.js';
 
 /** Build a minimal PNG containing the given tEXt chunks (CRC not checked). */
 function pngWithText(entries: Record<string, string>): Buffer {
@@ -67,7 +68,12 @@ describe('loadCardFile / CharacterRepository', () => {
 
     const warnings: string[] = [];
     const repo = await CharacterRepository.loadFromDirectory(dir, { info: () => {}, warn: (m) => warnings.push(m) });
-    expect(repo.list().map((c) => c.id).sort()).toEqual(['mira', 'mira-2']);
+    expect(
+      repo
+        .list()
+        .map((c) => c.id)
+        .sort(),
+    ).toEqual(['mira', 'mira-2']);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toMatch(/broken\.json/);
   });
@@ -78,10 +84,12 @@ describe('loadCardFile / CharacterRepository', () => {
 });
 
 describe('shipped character cards', () => {
-  it('load with a fixed appearance', async () => {
+  it('load with a fixed appearance that passes the image safety rules', async () => {
     for (const file of ['characters/aria.json', 'characters/aria-fr.json']) {
       const card = await loadCardFile(file);
-      expect(card.appearance).toMatch(/^woman, 26 years old/);
+      expect(card.appearance.length).toBeGreaterThan(10);
+      expect(mentionsMinor(card.appearance)).toBe(false);
+      expect(cardStatesMinorAge(card.description)).toBe(false);
     }
   });
 });

@@ -20,13 +20,28 @@ const silentLog = { warn: () => {}, info: () => {} };
 
 describe('safety', () => {
   it('detects minors in English and French, and under-18 ages', () => {
-    for (const t of ['a teen at school', 'little girl', 'loli style', 'une adolescente', 'en uniforme scolaire', 'elle a 16 ans', '15-year-old', 'aged 12', 'lycéenne']) {
+    for (const t of [
+      'a teen at school',
+      'little girl',
+      'loli style',
+      'une adolescente',
+      'en uniforme scolaire',
+      'elle a 16 ans',
+      '15-year-old',
+      'aged 12',
+      'lycéenne',
+    ]) {
       expect(mentionsMinor(t), t).toBe(true);
     }
   });
 
   it('accepts adult descriptions', () => {
-    for (const t of ['woman, 26 years old, auburn hair', 'elle a 26 ans', 'mirror selfie, cozy sweater', 'jeune femme de 30 ans']) {
+    for (const t of [
+      'woman, 26 years old, auburn hair',
+      'elle a 26 ans',
+      'mirror selfie, cozy sweater',
+      'jeune femme de 30 ans',
+    ]) {
       expect(mentionsMinor(t), t).toBe(false);
     }
   });
@@ -34,15 +49,34 @@ describe('safety', () => {
   it('only rejects explicit minor ages in cards (free text about children is fine)', () => {
     expect(cardStatesMinorAge("She illustrates children's books")).toBe(false);
     expect(cardStatesMinorAge('She is 17 years old')).toBe(true);
-    expect(() => assertSafe('ok', 'teenager')).toThrow(ImageRefusedError);
+    expect(() => {
+      assertSafe('ok', 'teenager');
+    }).toThrow(ImageRefusedError);
   });
 });
 
 describe('workflow', () => {
   it('builds a linked SDXL txt2img graph', () => {
-    const wf = buildTxt2ImgWorkflow({ checkpoint: 'x.safetensors', positive: 'p', negative: 'n', width: 832, height: 1216, steps: 25, cfg: 5.5, sampler: 'dpmpp_2m', scheduler: 'karras', seed: 42 });
+    const wf = buildTxt2ImgWorkflow({
+      checkpoint: 'x.safetensors',
+      positive: 'p',
+      negative: 'n',
+      width: 832,
+      height: 1216,
+      steps: 25,
+      cfg: 5.5,
+      sampler: 'dpmpp_2m',
+      scheduler: 'karras',
+      seed: 42,
+    });
     expect(wf['1']).toEqual({ class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: 'x.safetensors' } });
-    expect(wf['5']!.inputs).toMatchObject({ seed: 42, model: ['1', 0], positive: ['3', 0], negative: ['4', 0], latent_image: ['2', 0] });
+    expect(wf['5']!.inputs).toMatchObject({
+      seed: 42,
+      model: ['1', 0],
+      positive: ['3', 0],
+      negative: ['4', 0],
+      latent_image: ['2', 0],
+    });
     // Every link points to an existing node.
     for (const node of Object.values(wf)) {
       for (const v of Object.values(node.inputs)) if (Array.isArray(v)) expect(wf).toHaveProperty(String(v[0]));
@@ -52,7 +86,10 @@ describe('workflow', () => {
 
 describe('parsePhotoIdea / readAppearance', () => {
   it('parses tolerant JSON and rejects garbage', () => {
-    expect(parsePhotoIdea('Sure! ```{"caption": "Tadaa", "scene": "selfie,\\n beach"}```')).toEqual({ caption: 'Tadaa', scene: 'selfie, beach' });
+    expect(parsePhotoIdea('Sure! ```{"caption": "Tadaa", "scene": "selfie,\\n beach"}```')).toEqual({
+      caption: 'Tadaa',
+      scene: 'selfie, beach',
+    });
     expect(parsePhotoIdea('no json')).toBeUndefined();
     expect(parsePhotoIdea('{"caption": ""}')).toBeUndefined();
   });
@@ -122,7 +159,9 @@ describe('ComfyClient', () => {
     comfy.pollsBeforeDone = 1000;
     const client = new ComfyClient({ baseUrl: 'http://comfy', pollIntervalMs: 5, fetchImpl: comfy.fetch });
     const controller = new AbortController();
-    setTimeout(() => controller.abort(), 20);
+    setTimeout(() => {
+      controller.abort();
+    }, 20);
     await expect(client.generate({}, controller.signal)).rejects.toThrow();
     expect(comfy.cancelled).toEqual(['/queue', '/interrupt']);
   });
@@ -130,30 +169,61 @@ describe('ComfyClient', () => {
   it('times out with a clear error', async () => {
     const comfy = new FakeComfy();
     comfy.pollsBeforeDone = 1000;
-    const client = new ComfyClient({ baseUrl: 'http://comfy', pollIntervalMs: 5, timeoutMs: 30, fetchImpl: comfy.fetch });
+    const client = new ComfyClient({
+      baseUrl: 'http://comfy',
+      pollIntervalMs: 5,
+      timeoutMs: 30,
+      fetchImpl: comfy.fetch,
+    });
     await expect(client.generate({})).rejects.toThrow(ComfyError);
   });
 });
 
-async function setupImages(overrides: { character?: Parameters<typeof makeCharacter>[0]; checkpoint?: string | undefined } = {}) {
+async function setupImages(
+  overrides: { character?: Parameters<typeof makeCharacter>[0]; checkpoint?: string | undefined } = {},
+) {
   const { db, store } = makeStore();
-  const characters = CharacterRepository.fromCharacters([makeCharacter({ appearance: 'woman, 26 years old, auburn hair', ...overrides.character })]);
+  const characters = CharacterRepository.fromCharacters([
+    makeCharacter({ appearance: 'woman, 26 years old, auburn hair', ...overrides.character }),
+  ]);
   const raw = new ScriptedLlm({ chat: 'Bonsoir' });
   const gate = new GpuGate();
   const llm = new GatedLlmProvider(raw, gate);
   const comfy = new FakeComfy();
   const dir = await mkdtemp(join(tmpdir(), 'girllm-img-'));
-  const images = new ImageService(store, characters, new ImageStore(db), llm, new ComfyClient({ baseUrl: 'http://comfy', pollIntervalMs: 1, fetchImpl: comfy.fetch }), gate, silentLog, {
-    userName: 'Etienne',
-    replyLanguage: 'French',
-    imagesDir: dir,
-    settings: {
-      checkpoint: 'checkpoint' in overrides ? overrides.checkpoint : 'sdxl.safetensors',
-      width: 832, height: 1216, steps: 20, cfg: 5, sampler: 'dpmpp_2m', scheduler: 'karras',
-      style: 'photograph', negative: 'blurry',
+  const images = new ImageService(
+    store,
+    characters,
+    new ImageStore(db),
+    llm,
+    new ComfyClient({ baseUrl: 'http://comfy', pollIntervalMs: 1, fetchImpl: comfy.fetch }),
+    gate,
+    silentLog,
+    {
+      userName: 'Etienne',
+      replyLanguage: 'French',
+      imagesDir: dir,
+      settings: {
+        checkpoint: 'checkpoint' in overrides ? overrides.checkpoint : 'sdxl.safetensors',
+        width: 832,
+        height: 1216,
+        steps: 20,
+        cfg: 5,
+        sampler: 'dpmpp_2m',
+        scheduler: 'karras',
+        style: 'photograph',
+        negative: 'blurry',
+      },
     },
-  });
-  const chat = new ChatService(characters, store, llm, { userName: 'Etienne', budget: { contextTokens: 4096, maxReplyTokens: 200 }, temperature: 0.7, topP: 0.9 }, undefined, images);
+  );
+  const chat = new ChatService(
+    characters,
+    store,
+    llm,
+    { userName: 'Etienne', budget: { contextTokens: 4096, maxReplyTokens: 200 }, temperature: 0.7, topP: 0.9 },
+    undefined,
+    images,
+  );
   return { store, raw, comfy, images, chat, dir };
 }
 
@@ -184,7 +254,9 @@ describe('ImageService + ChatService.sendPhoto', () => {
     await chat.sendPhoto(session.id, '');
     await chat.sendMessage(session.id, 'Trop belle !', () => {});
     const lastChat = raw.callsOfKind('chat').at(-1)!;
-    expect(lastChat.some((m) => m.content.includes('*Aria sent a photo: selfie, smiling, cozy living room'))).toBe(true);
+    expect(lastChat.some((m) => m.content.includes('*Aria sent a photo: selfie, smiling, cozy living room'))).toBe(
+      true,
+    );
   });
 
   it('refuses requests or cards involving minors, before calling ComfyUI', async () => {
@@ -201,10 +273,30 @@ describe('ImageService + ChatService.sendPhoto', () => {
     const c = await setupImages();
     const raw = new ScriptedLlm({ photo: '{"caption": "x", "scene": "teenager, school"}' });
     const s3 = c.chat.createSession('aria').session;
-    const svc = new ImageService(c.store, CharacterRepository.fromCharacters([makeCharacter()]), new ImageStore(makeStore().db), raw, new ComfyClient({ baseUrl: 'http://comfy', fetchImpl: c.comfy.fetch }), new GpuGate(), silentLog, {
-      userName: 'U', imagesDir: c.dir,
-      settings: { checkpoint: 'sdxl.safetensors', width: 832, height: 1216, steps: 20, cfg: 5, sampler: 'a', scheduler: 'b', style: '', negative: '' },
-    });
+    const svc = new ImageService(
+      c.store,
+      CharacterRepository.fromCharacters([makeCharacter()]),
+      new ImageStore(makeStore().db),
+      raw,
+      new ComfyClient({ baseUrl: 'http://comfy', fetchImpl: c.comfy.fetch }),
+      new GpuGate(),
+      silentLog,
+      {
+        userName: 'U',
+        imagesDir: c.dir,
+        settings: {
+          checkpoint: 'sdxl.safetensors',
+          width: 832,
+          height: 1216,
+          steps: 20,
+          cfg: 5,
+          sampler: 'a',
+          scheduler: 'b',
+          style: '',
+          negative: '',
+        },
+      },
+    );
     await expect(svc.createPhoto(s3.id, '')).rejects.toBeInstanceOf(ImageRefusedError);
     expect(c.comfy.queued).toHaveLength(0);
   });
@@ -237,12 +329,19 @@ describe('safety age patterns', () => {
   it.each(['15 year old', '15-years-old', '9yo', '17 y/o', 'âgée de 15', '12 ans'])('flags %s', (t) => {
     expect(mentionsMinor(t)).toBe(true);
   });
-  it.each(['18 years old', '25-year-old', '30 ans', 'aged 40', '2026 photo', '10 years of experience'])('accepts %s', (t) => {
-    expect(mentionsMinor(t)).toBe(false);
-  });
+  it.each(['18 years old', '25-year-old', '30 ans', 'aged 40', '2026 photo', '10 years of experience'])(
+    'accepts %s',
+    (t) => {
+      expect(mentionsMinor(t)).toBe(false);
+    },
+  );
 });
 
 describe('safety with accented words', () => {
-  it.each(['un bébé', 'une écolière', 'Bébé.', 'âgée de 15 ans'])('flags %s', (t) => expect(mentionsMinor(t)).toBe(true));
-  it.each(['adolescence lointaine', 'adorable', 'kidding', 'minority report'])('accepts %s', (t) => expect(mentionsMinor(t)).toBe(false));
+  it.each(['un bébé', 'une écolière', 'Bébé.', 'âgée de 15 ans'])('flags %s', (t) => {
+    expect(mentionsMinor(t)).toBe(true);
+  });
+  it.each(['adolescence lointaine', 'adorable', 'kidding', 'minority report'])('accepts %s', (t) => {
+    expect(mentionsMinor(t)).toBe(false);
+  });
 });

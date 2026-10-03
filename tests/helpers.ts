@@ -65,15 +65,14 @@ export function makeStore(): { db: Db; store: SqliteSessionStore } {
  */
 export class ScriptedLlm implements LlmProvider {
   calls: ChatMessage[][] = [];
-  constructor(
-    private readonly script: { chat?: string; summary?: string; extraction?: string; photo?: string } = {},
-  ) {}
+  constructor(private readonly script: { chat?: string; summary?: string; extraction?: string; photo?: string } = {}) {}
 
   async *streamChat(messages: ChatMessage[]): AsyncGenerator<string> {
     this.calls.push(messages);
     const system = messages[0]?.content ?? '';
     if (system.includes('about to send a photo')) {
-      yield this.script.photo ?? '{"caption": "*sourit* Voilà !", "scene": "selfie, smiling, cozy living room, warm lamp light"}';
+      yield this.script.photo ??
+        '{"caption": "*sourit* Voilà !", "scene": "selfie, smiling, cozy living room, warm lamp light"}';
       return;
     }
     if (system.includes('running summary')) yield this.script.summary ?? 'They talked.';
@@ -149,16 +148,27 @@ export class FakeComfy {
     }
     if (url.pathname === '/prompt') {
       if (this.failWith === 'node_error') {
-        return json({ error: { message: 'Prompt outputs failed validation' }, node_errors: { '1': { errors: [{ message: 'Value not in list', details: 'ckpt_name: nope' }] } } }, 400);
+        return json(
+          {
+            error: { message: 'Prompt outputs failed validation' },
+            node_errors: { '1': { errors: [{ message: 'Value not in list', details: 'ckpt_name: nope' }] } },
+          },
+          400,
+        );
       }
-      this.queued.push(JSON.parse(String(init?.body)));
+      this.queued.push(JSON.parse(init?.body as string));
       return json({ prompt_id: 'p1', number: 1 });
     }
     if (url.pathname === '/history/p1') {
       init?.signal?.throwIfAborted();
       if (this.polls++ < this.pollsBeforeDone) return json({});
       if (this.failWith === 'execution') return json({ p1: { status: { status_str: 'error', completed: false } } });
-      return json({ p1: { status: { status_str: 'success', completed: true }, outputs: { '7': { images: [{ filename: 'girllm_0001.png', subfolder: '', type: 'output' }] } } } });
+      return json({
+        p1: {
+          status: { status_str: 'success', completed: true },
+          outputs: { '7': { images: [{ filename: 'girllm_0001.png', subfolder: '', type: 'output' }] } },
+        },
+      });
     }
     if (url.pathname === '/view') {
       return new Response(this.failWith === 'not_png' ? Buffer.from('<html>') : TINY_PNG);

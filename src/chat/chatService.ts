@@ -98,7 +98,12 @@ export class ChatService {
   }
 
   /** Add the user's message and stream the character's reply. */
-  sendMessage(sessionId: string, text: string, onToken: (t: string) => void, signal?: AbortSignal): Promise<ReplyResult> {
+  sendMessage(
+    sessionId: string,
+    text: string,
+    onToken: (t: string) => void,
+    signal?: AbortSignal,
+  ): Promise<ReplyResult> {
     return this.withLock(sessionId, async () => {
       this.getSession(sessionId); // validate before mutating
       this.sessions.appendMessage(sessionId, 'user', text);

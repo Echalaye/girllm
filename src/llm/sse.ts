@@ -5,9 +5,7 @@
  * endings. Only `data:` fields are relevant for chat completions, so other
  * fields (event, id, retry) and comments are ignored.
  */
-export async function* parseSseData(
-  stream: AsyncIterable<Uint8Array>,
-): AsyncGenerator<string> {
+export async function* parseSseData(stream: AsyncIterable<Uint8Array>): AsyncGenerator<string> {
   const decoder = new TextDecoder();
   let buffer = '';
   let dataLines: string[] = [];

@@ -85,9 +85,7 @@ export interface SummarizeInput {
 export const SUMMARY_MAX_TOKENS = 450;
 
 export function buildSummaryPrompt(input: SummarizeInput) {
-  const language = input.language
-    ? `Write in ${input.language}.`
-    : 'Write in the same language as the conversation.';
+  const language = input.language ? `Write in ${input.language}.` : 'Write in the same language as the conversation.';
   return [
     {
       role: 'system' as const,

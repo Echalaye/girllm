@@ -23,9 +23,11 @@ const CATALOG: Record<string, ModelArchive & { description: string }> = { ...STT
 
 function printList(): void {
   console.log('Speech-to-text (STT_MODEL):');
-  for (const [id, m] of Object.entries(STT_MODELS)) console.log(`  ${id.padEnd(15)} ${String(m.sizeMb).padStart(4)} MB  ${m.description}`);
+  for (const [id, m] of Object.entries(STT_MODELS))
+    console.log(`  ${id.padEnd(15)} ${String(m.sizeMb).padStart(4)} MB  ${m.description}`);
   console.log('Voices (TTS_VOICE):');
-  for (const [id, v] of Object.entries(TTS_VOICES)) console.log(`  ${id.padEnd(15)} ${String(v.sizeMb).padStart(4)} MB  ${v.description}`);
+  for (const [id, v] of Object.entries(TTS_VOICES))
+    console.log(`  ${id.padEnd(15)} ${String(v.sizeMb).padStart(4)} MB  ${v.description}`);
 }
 
 /** Download `url` to `dest`, hashing on the fly, with a progress line. */
@@ -51,13 +53,15 @@ async function download(url: string, dest: string, expectedSha256: string): Prom
     },
   });
 
-  await pipeline(Readable.fromWeb(res.body as import('node:stream/web').ReadableStream), meter, createWriteStream(dest));
+  await pipeline(Readable.fromWeb(res.body), meter, createWriteStream(dest));
   process.stdout.write('\n');
 
   const actual = hash.digest('hex');
   if (actual !== expectedSha256) {
     await rm(dest, { force: true });
-    throw new Error(`Checksum mismatch for ${url}\n  expected ${expectedSha256}\n  got      ${actual}\nNothing was extracted.`);
+    throw new Error(
+      `Checksum mismatch for ${url}\n  expected ${expectedSha256}\n  got      ${actual}\nNothing was extracted.`,
+    );
   }
 }
 
@@ -65,8 +69,13 @@ async function download(url: string, dest: string, expectedSha256: string): Prom
 function extract(archive: string, cwd: string): Promise<void> {
   return new Promise((resolvePromise, reject) => {
     const child = spawn('tar', ['-xjf', archive], { cwd, stdio: 'inherit' });
-    child.on('error', (err) => reject(new Error(`Cannot run tar: ${err.message}`)));
-    child.on('exit', (code) => (code === 0 ? resolvePromise() : reject(new Error(`tar exited with code ${code}`))));
+    child.on('error', (err) => {
+      reject(new Error(`Cannot run tar: ${err.message}`));
+    });
+    child.on('exit', (code) => {
+      if (code === 0) resolvePromise();
+      else reject(new Error(`tar exited with code ${String(code)}`));
+    });
   });
 }
 
@@ -98,7 +107,10 @@ async function install(id: string, modelsDir: string): Promise<void> {
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
-  if (args.includes('--list')) return printList();
+  if (args.includes('--list')) {
+    printList();
+    return;
+  }
 
   const config = loadConfig();
   const modelsDir = resolve(config.voice.modelsDir);

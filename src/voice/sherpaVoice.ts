@@ -9,6 +9,10 @@
  * for the same CPU cores anyway.
  */
 import { existsSync } from 'node:fs';
+// Type-only imports: erased at compile time, so the native addon is still
+// loaded lazily by loadSherpa() below.
+import type sherpaModule from 'sherpa-onnx-node';
+import type { OfflineRecognizer, OfflineTts } from 'sherpa-onnx-node';
 import { join, resolve } from 'node:path';
 import { Mutex } from '../util/mutex.js';
 import { STT_MODELS, TTS_VOICES, type SttModelId, type TtsVoiceId } from './catalog.js';
@@ -20,7 +24,7 @@ import {
   type VoiceComponentStatus,
 } from './types.js';
 
-type Sherpa = typeof import('sherpa-onnx-node').default;
+type Sherpa = typeof sherpaModule;
 
 /** Import the native addon only when voice is actually used. */
 let sherpaPromise: Promise<Sherpa> | undefined;
@@ -46,7 +50,7 @@ export interface SherpaSttOptions {
 
 export class SherpaSpeechToText implements SpeechToText {
   private readonly mutex = new Mutex();
-  private recognizer?: Promise<import('sherpa-onnx-node').OfflineRecognizer>;
+  private recognizer?: Promise<OfflineRecognizer>;
   private readonly files: { encoder: string; decoder: string; tokens: string };
 
   constructor(private readonly opts: SherpaSttOptions) {
@@ -115,7 +119,7 @@ export interface SherpaTtsOptions {
 
 export class SherpaTextToSpeech implements TextToSpeech {
   private readonly mutex = new Mutex();
-  private tts?: Promise<import('sherpa-onnx-node').OfflineTts>;
+  private tts?: Promise<OfflineTts>;
   private readonly files: { model: string; tokens: string; dataDir: string };
 
   constructor(private readonly opts: SherpaTtsOptions) {

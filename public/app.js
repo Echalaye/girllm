@@ -60,8 +60,20 @@ const speaker = new Speaker(async (text) => {
 
 /** localStorage may be unavailable (private mode…): never let it crash. */
 const store = {
-  get(key) { try { return localStorage.getItem(key); } catch { return null; } },
-  set(key, value) { try { localStorage.setItem(key, value); } catch { /* ignore */ } },
+  get(key) {
+    try {
+      return localStorage.getItem(key);
+    } catch {
+      return null;
+    }
+  },
+  set(key, value) {
+    try {
+      localStorage.setItem(key, value);
+    } catch {
+      /* ignore */
+    }
+  },
 };
 
 function setStatus(text, isError = false) {
@@ -152,7 +164,16 @@ function renderSession(session) {
 }
 
 function setBusy(busy) {
-  for (const el of [els.send, els.regenerate, els.newChat, els.deleteChat, els.select, els.sessionSelect, els.mic, els.photo]) {
+  for (const el of [
+    els.send,
+    els.regenerate,
+    els.newChat,
+    els.deleteChat,
+    els.select,
+    els.sessionSelect,
+    els.mic,
+    els.photo,
+  ]) {
     el.disabled = busy;
   }
   els.stop.hidden = !busy;
@@ -326,7 +347,8 @@ async function renderMemoryPanel() {
     api(`/api/sessions/${state.sessionId}`),
     api(`/api/characters/${encodeURIComponent(state.characterId)}/memories`),
   ]);
-  els.memorySummary.textContent = session.summary || 'Nothing summarized yet: the conversation still fits in the context.';
+  els.memorySummary.textContent =
+    session.summary || 'Nothing summarized yet: the conversation still fits in the context.';
   els.memoryMood.textContent = session.mood ? `Current mood: ${session.mood}` : '';
 
   if (memories.length === 0) {
@@ -512,9 +534,15 @@ async function initVoice() {
 
 // ---------- wiring ----------
 
-els.form.addEventListener('submit', (e) => { e.preventDefault(); void sendMessage(); });
+els.form.addEventListener('submit', (e) => {
+  e.preventDefault();
+  void sendMessage();
+});
 els.input.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); void sendMessage(); }
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+    e.preventDefault();
+    void sendMessage();
+  }
 });
 els.stop.addEventListener('click', () => {
   state.controller?.abort();

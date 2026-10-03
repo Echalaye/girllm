@@ -16,16 +16,26 @@
       <button id="new-chat" type="button">New chat</button>
       <button id="delete-chat" class="danger" type="button" title="Delete this chat">Delete</button>
       <button id="open-memory" type="button" hidden>Memory</button>
-      <button id="voice-toggle" type="button" aria-pressed="false" title="Read her replies aloud" hidden>🔈 Voice off</button>
+      <button id="voice-toggle" type="button" aria-pressed="false" title="Read her replies aloud" hidden>
+        🔈 Voice off
+      </button>
       <span id="status" class="status" role="status" aria-live="polite"></span>
     </header>
 
     <main id="messages" class="messages" aria-live="polite"></main>
 
     <form id="composer" class="composer" autocomplete="off">
-      <textarea id="input" rows="2" maxlength="8000" placeholder="Write a message… (Enter to send, Shift+Enter for a new line)" aria-label="Message"></textarea>
+      <textarea
+        id="input"
+        rows="2"
+        maxlength="8000"
+        placeholder="Write a message… (Enter to send, Shift+Enter for a new line)"
+        aria-label="Message"
+      ></textarea>
       <div class="actions">
-        <button id="mic" type="button" title="Talk (click again to send)" aria-label="Record a voice message" hidden>🎤</button>
+        <button id="mic" type="button" title="Talk (click again to send)" aria-label="Record a voice message" hidden>
+          🎤
+        </button>
         <button id="photo" type="button" aria-label="Ask for a photo" hidden>📷</button>
         <button id="regenerate" type="button" title="Generate another reply">↻</button>
         <button id="stop" type="button" hidden>Stop</button>
@@ -54,7 +64,14 @@
             <option value="relationship">Relationship</option>
             <option value="event">Event</option>
           </select>
-          <input id="memory-content" maxlength="300" minlength="3" required placeholder="Add something she should remember…" aria-label="New memory" />
+          <input
+            id="memory-content"
+            maxlength="300"
+            minlength="3"
+            required
+            placeholder="Add something she should remember…"
+            aria-label="New memory"
+          />
           <button type="submit">Add</button>
         </form>
         <ul id="memory-list" class="memory-list"></ul>

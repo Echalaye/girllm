@@ -42,10 +42,10 @@ export class OpenAiCompatProvider implements LlmProvider {
     // The connect timeout must only cover "waiting for headers", not the
     // whole (potentially long) generation, hence a separate controller.
     const connectTimeout = new AbortController();
-    const timer = setTimeout(() => connectTimeout.abort(new Error('LLM backend connect timeout')), this.connectTimeoutMs);
-    const signal = options.signal
-      ? AbortSignal.any([options.signal, connectTimeout.signal])
-      : connectTimeout.signal;
+    const timer = setTimeout(() => {
+      connectTimeout.abort(new Error('LLM backend connect timeout'));
+    }, this.connectTimeoutMs);
+    const signal = options.signal ? AbortSignal.any([options.signal, connectTimeout.signal]) : connectTimeout.signal;
 
     let response: Response;
     try {

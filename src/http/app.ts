@@ -18,7 +18,7 @@ import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastif
 import { z, ZodError } from 'zod';
 import type { CharacterRepository } from '../characters/characterRepository.js';
 import { toSummary } from '../characters/schema.js';
-import { ChatService, NotFoundError, SessionBusyError, type ReplyResult } from '../chat/chatService.js';
+import { type ChatService, NotFoundError, SessionBusyError, type ReplyResult } from '../chat/chatService.js';
 import type { Session } from '../chat/sessionStore.js';
 import type { MemoryService } from '../memory/memoryService.js';
 import { ComfyError } from '../images/comfyClient.js';
@@ -82,7 +82,13 @@ function publicSession(s: Session) {
     createdAt: s.createdAt,
     summary: s.summary,
     mood: s.mood,
-    messages: s.messages.map(({ id, role, content, imageId, createdAt }) => ({ id, role, content, imageId, createdAt })),
+    messages: s.messages.map(({ id, role, content, imageId, createdAt }) => ({
+      id,
+      role,
+      content,
+      imageId,
+      createdAt,
+    })),
   };
 }
 
@@ -92,7 +98,8 @@ function publicMemory(m: Memory) {
 
 /** Map domain errors to HTTP status codes + safe messages. */
 function httpError(err: unknown): { status: number; message: string } {
-  if (err instanceof ZodError) return { status: 400, message: err.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ') };
+  if (err instanceof ZodError)
+    return { status: 400, message: err.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ') };
   if (err instanceof NotFoundError) return { status: 404, message: err.message };
   if (err instanceof SessionBusyError) return { status: 409, message: err.message };
   if (err instanceof PromptTooLargeError) return { status: 413, message: err.message };
@@ -100,7 +107,8 @@ function httpError(err: unknown): { status: number; message: string } {
   if (err instanceof ImageUnavailableError) return { status: 503, message: err.message };
   if (err instanceof ImageRefusedError) return { status: 422, message: err.message };
   if (err instanceof ComfyError) return { status: 502, message: err.message };
-  if (err instanceof LlmHttpError) return { status: 502, message: 'The LLM backend rejected the request (is the model pulled?)' };
+  if (err instanceof LlmHttpError)
+    return { status: 502, message: 'The LLM backend rejected the request (is the model pulled?)' };
   if (err instanceof TypeError && /fetch failed/i.test(err.message)) {
     return { status: 502, message: 'Cannot reach the LLM backend. Is Ollama running?' };
   }
@@ -272,8 +280,12 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   // ---- Voice -----------------------------------------------------------------
 
   // Raw audio uploads for /api/stt (other routes keep the 64 KB JSON limit).
-  app.addContentTypeParser('application/octet-stream', { parseAs: 'buffer', bodyLimit: MAX_STT_BYTES }, (_req, body, done) =>
-    done(null, body),
+  app.addContentTypeParser(
+    'application/octet-stream',
+    { parseAs: 'buffer', bodyLimit: MAX_STT_BYTES },
+    (_req, body, done) => {
+      done(null, body);
+    },
   );
 
   const voiceDisabled = { available: false, model: '', reason: 'disabled (VOICE_ENABLED=false)' };
@@ -320,7 +332,9 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       request,
       reply,
       async (send, signal) => {
-        const result = await run((text) => send('token', { text }), signal);
+        const result = await run((text) => {
+          send('token', { text });
+        }, signal);
         send('done', {
           messageId: result.message?.id ?? null,
           aborted: result.aborted,

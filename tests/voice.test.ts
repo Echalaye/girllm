@@ -11,7 +11,9 @@ import { decodeFloat32, encodeWav16 } from '../src/voice/wav.js';
 
 describe('cleanForSpeech', () => {
   it('drops actions, emojis, markdown and URLs', () => {
-    expect(cleanForSpeech('*sourit* Coucou 😊 **toi** ! Regarde https://x.y/z ça _marche_')).toBe('Coucou toi ! Regarde ça marche');
+    expect(cleanForSpeech('*sourit* Coucou 😊 **toi** ! Regarde https://x.y/z ça _marche_')).toBe(
+      'Coucou toi ! Regarde ça marche',
+    );
     expect(cleanForSpeech('*se blottit contre toi*')).toBe('');
   });
 });
@@ -47,7 +49,11 @@ describe('Mutex', () => {
     const failing = m.run(async () => {
       throw new Error('boom');
     });
-    const results = await Promise.all([task('a', 20), failing.catch((e: Error) => e.message), task('b', 1)]);
+    const results = await Promise.all([
+      task('a', 20),
+      failing.catch((e: unknown) => (e as Error).message),
+      task('b', 1),
+    ]);
     expect(results).toEqual(['a', 'boom', 'b']);
     expect(log).toEqual(['start a', 'end a', 'start b', 'end b']);
   });
@@ -70,7 +76,9 @@ describe('sherpa engines without models', () => {
     const tts = new SherpaTextToSpeech({ modelsDir: dir, voice: 'fr-siwis', speed: 1, numThreads: 1 });
     expect(stt.status()).toMatchObject({ available: false, model: 'whisper-base' });
     expect(tts.status().reason).toMatch(/setup:voice/);
-    await expect(stt.transcribe({ samples: new Float32Array(16000), sampleRate: 16000 })).rejects.toBeInstanceOf(VoiceUnavailableError);
+    await expect(stt.transcribe({ samples: new Float32Array(16000), sampleRate: 16000 })).rejects.toBeInstanceOf(
+      VoiceUnavailableError,
+    );
     await expect(tts.synthesize('Bonjour')).rejects.toBeInstanceOf(VoiceUnavailableError);
   });
 });

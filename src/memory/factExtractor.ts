@@ -44,7 +44,9 @@ export interface ExtractInput {
 
 export function buildExtractionPrompt(input: ExtractInput) {
   const { charName: char, userName: user } = input;
-  const language = input.language ? `Write the facts in ${input.language}.` : 'Write the facts in the language of the conversation.';
+  const language = input.language
+    ? `Write the facts in ${input.language}.`
+    : 'Write the facts in the language of the conversation.';
   const known = input.knownFacts.length ? input.knownFacts.map((f) => `- ${f}`).join('\n') : '(none)';
   return [
     {

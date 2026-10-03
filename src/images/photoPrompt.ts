@@ -32,8 +32,16 @@ const MAX_SCENE_CHARS = 600;
 const CONTEXT_MESSAGES = 6;
 
 const IdeaSchema = z.object({
-  caption: z.string().trim().min(1).max(MAX_CAPTION_CHARS * 2),
-  scene: z.string().trim().min(3).max(MAX_SCENE_CHARS * 2),
+  caption: z
+    .string()
+    .trim()
+    .min(1)
+    .max(MAX_CAPTION_CHARS * 2),
+  scene: z
+    .string()
+    .trim()
+    .min(3)
+    .max(MAX_SCENE_CHARS * 2),
 });
 
 export function buildPhotoPrompt(input: PhotoPromptInput) {

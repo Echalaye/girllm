@@ -25,7 +25,11 @@ describe('ChatService', () => {
 
     expect(tokens.join('')).toBe('Hello there');
     expect(result.message?.content).toBe('Hello there');
-    expect(service.getSession(session.id).session.messages.map((m) => m.role)).toEqual(['assistant', 'user', 'assistant']);
+    expect(service.getSession(session.id).session.messages.map((m) => m.role)).toEqual([
+      'assistant',
+      'user',
+      'assistant',
+    ]);
     expect(llm.lastOptions?.stop).toContain('\nEtienne:');
     expect(llm.lastMessages[0]?.role).toBe('system');
   });
@@ -57,7 +61,14 @@ describe('ChatService', () => {
     const { service } = setup(new FakeLlm(['part', 'never'], 10));
     const { session } = service.createSession('aria');
     const controller = new AbortController();
-    const result = await service.sendMessage(session.id, 'go', () => controller.abort(), controller.signal);
+    const result = await service.sendMessage(
+      session.id,
+      'go',
+      () => {
+        controller.abort();
+      },
+      controller.signal,
+    );
     expect(result.aborted).toBe(true);
     expect(result.message?.content).toBe('part');
   });
@@ -69,7 +80,9 @@ describe('ChatService', () => {
     expect(service.listSessions('aria')).toMatchObject([{ id: session.id, title: 'First message', messageCount: 3 }]);
     service.deleteSession(session.id);
     expect(service.listSessions('aria')).toEqual([]);
-    expect(() => service.deleteSession(session.id)).toThrow(NotFoundError);
+    expect(() => {
+      service.deleteSession(session.id);
+    }).toThrow(NotFoundError);
   });
 
   it('rejects unknown characters and sessions', () => {
@@ -78,4 +91,3 @@ describe('ChatService', () => {
     expect(() => service.getSession('00000000-0000-4000-8000-000000000000')).toThrow(NotFoundError);
   });
 });
-

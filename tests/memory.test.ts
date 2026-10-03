@@ -58,13 +58,18 @@ describe('selectMessagesToSummarize', () => {
   });
 
   it('derives a policy from the context size', () => {
-    expect(defaultSummaryPolicy(8192, 400)).toEqual({ triggerTokens: 3896, keepRecentTokens: 1948, maxChunkTokens: 3276 });
+    expect(defaultSummaryPolicy(8192, 400)).toEqual({
+      triggerTokens: 3896,
+      keepRecentTokens: 1948,
+      maxChunkTokens: 3276,
+    });
   });
 });
 
 describe('parseExtraction', () => {
   it('parses JSON wrapped in prose / fences and drops invalid items', () => {
-    const raw = 'Here you go:\n```json\n{"facts":[{"category":"User","content":"Etienne climbs on weekends"},' +
+    const raw =
+      'Here you go:\n```json\n{"facts":[{"category":"User","content":"Etienne climbs on weekends"},' +
       '{"category":"admin","content":"bad"},{"category":"event","content":"x"}],"mood":"playful"}\n```';
     expect(parseExtraction(raw)).toEqual({
       facts: [{ category: 'user', content: 'Etienne climbs on weekends' }],
@@ -93,7 +98,11 @@ describe('buildQuery / buildMemoryBlock', () => {
   });
 });
 
-function setupMemory(opts: Partial<MemoryServiceOptions> = {}, llm = new ScriptedLlm(), embeddings: FakeEmbeddings | undefined = new FakeEmbeddings()) {
+function setupMemory(
+  opts: Partial<MemoryServiceOptions> = {},
+  llm = new ScriptedLlm(),
+  embeddings: FakeEmbeddings | undefined = new FakeEmbeddings(),
+) {
   const { db, store } = makeStore();
   const characters = CharacterRepository.fromCharacters([makeCharacter()]);
   const memories = new MemoryStore(db);
@@ -194,16 +203,23 @@ describe('MemoryService', () => {
       duplicateThreshold: 0.9,
       minRelevance: 0.3,
     });
-    const chat = new ChatService(characters, store, llm, {
-      userName: 'Etienne',
-      budget: { contextTokens: 4096, maxReplyTokens: 200 },
-      temperature: 0.7,
-      topP: 0.9,
-    }, memory);
+    const chat = new ChatService(
+      characters,
+      store,
+      llm,
+      {
+        userName: 'Etienne',
+        budget: { contextTokens: 4096, maxReplyTokens: 200 },
+        temperature: 0.7,
+        topP: 0.9,
+      },
+      memory,
+    );
 
     await memory.remember('aria', 'user', 'Etienne has a cat named Pixel');
     const { session } = chat.createSession('aria');
-    for (let i = 0; i < 3; i++) await chat.sendMessage(session.id, `Long message number ${i} ${'z'.repeat(80)}`, () => {});
+    for (let i = 0; i < 3; i++)
+      await chat.sendMessage(session.id, `Long message number ${i} ${'z'.repeat(80)}`, () => {});
     await memory.idle();
 
     expect(store.get(session.id)!.summary).toBe('They talked about Pixel.');

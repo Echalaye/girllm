@@ -8,9 +8,13 @@ import { makeStore } from './helpers.js';
 describe('database', () => {
   it('migrates idempotently and refuses newer schemas', () => {
     const db = openDatabase(':memory:');
-    expect(() => migrate(db)).not.toThrow();
+    expect(() => {
+      migrate(db);
+    }).not.toThrow();
     db.exec('PRAGMA user_version = 99');
-    expect(() => migrate(db)).toThrow(/newer than this app supports/);
+    expect(() => {
+      migrate(db);
+    }).toThrow(/newer than this app supports/);
   });
 });
 
@@ -55,7 +59,12 @@ describe('SqliteSessionStore', () => {
     const { store } = makeStore();
     const s = store.create('aria');
     store.updateMemoryState(s.id, { summary: 'They met.', summarizedUntil: 3, mood: 'happy' });
-    expect(store.get(s.id)).toMatchObject({ summary: 'They met.', summarizedUntil: 3, mood: 'happy', factsExtractedUntil: 0 });
+    expect(store.get(s.id)).toMatchObject({
+      summary: 'They met.',
+      summarizedUntil: 3,
+      mood: 'happy',
+      factsExtractedUntil: 0,
+    });
     expect(() => store.appendMessage('nope', 'user', 'x')).toThrow(SessionNotFoundError);
   });
 
@@ -68,7 +77,10 @@ describe('SqliteSessionStore', () => {
     store.delete(s.id);
     expect(memories.get(m.id)?.sourceSessionId).toBeNull();
     // Unknown source session -> stored with NULL instead of an FK error.
-    expect(memories.add({ characterId: 'aria', category: 'user', content: 'x y z', sourceSessionId: 'gone' }).sourceSessionId).toBeNull();
+    expect(
+      memories.add({ characterId: 'aria', category: 'user', content: 'x y z', sourceSessionId: 'gone' })
+        .sourceSessionId,
+    ).toBeNull();
   });
 });
 

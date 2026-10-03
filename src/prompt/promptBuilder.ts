@@ -17,7 +17,7 @@ import type { ChatMessage } from '../llm/types.js';
 import { estimateMessageTokens } from './tokenEstimator.js';
 
 export const DEFAULT_SYSTEM_PROMPT = [
-  "You are {{char}} in an ongoing, immersive roleplay conversation with {{user}}.",
+  'You are {{char}} in an ongoing, immersive roleplay conversation with {{user}}.',
   "Stay in character at all times and stay consistent with {{char}}'s personality and past messages.",
   "Write only {{char}}'s words, actions and thoughts; never speak or act on behalf of {{user}}.",
   'Keep replies natural and fairly concise (one to three short paragraphs). Put actions in *asterisks*.',
@@ -88,9 +88,7 @@ export class PromptTooLargeError extends Error {
  * replacer function instead of a replacement string.
  */
 export function applyMacros(text: string, charName: string, userName: string): string {
-  return text
-    .replace(/\{\{char\}\}|<bot>/gi, () => charName)
-    .replace(/\{\{user\}\}|<user>/gi, () => userName);
+  return text.replace(/\{\{char\}\}|<bot>/gi, () => charName).replace(/\{\{user\}\}|<user>/gi, () => userName);
 }
 
 /** Build the static system block describing the character. */
@@ -151,7 +149,9 @@ export function buildPrompt(
     applyMacros(character.post_history_instructions.trim(), character.name, userName),
     language ? `(Reply in ${language}.)` : '',
   ].filter(Boolean);
-  const post: ChatMessage | undefined = postParts.length ? { role: 'system', content: postParts.join('\n') } : undefined;
+  const post: ChatMessage | undefined = postParts.length
+    ? { role: 'system', content: postParts.join('\n') }
+    : undefined;
 
   const fixedTokens = estimateMessageTokens(system.content) + (post ? estimateMessageTokens(post.content) : 0);
   const available = budget.contextTokens - budget.maxReplyTokens - SAFETY_MARGIN_TOKENS - fixedTokens;

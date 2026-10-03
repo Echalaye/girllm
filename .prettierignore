@@ -1,0 +1,7 @@
+dist/
+coverage/
+data/
+models/
+package-lock.json
+# Character cards are user content (often downloaded): keep them as-is.
+characters/

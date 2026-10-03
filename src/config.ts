@@ -39,7 +39,10 @@ const ConfigSchema = z
     LLM_PROVIDER: z.enum(['ollama', 'openai']).default('ollama'),
     LLM_BASE_URL: z.string().url().default('http://127.0.0.1:11434'),
     // Ollama duration ("30m", "2h") or -1 to keep the model loaded forever.
-    LLM_KEEP_ALIVE: z.string().regex(/^(-1|\d+(ms|s|m|h))$/, 'e.g. 30m, 2h or -1').default('30m'),
+    LLM_KEEP_ALIVE: z
+      .string()
+      .regex(/^(-1|\d+(ms|s|m|h))$/, 'e.g. 30m, 2h or -1')
+      .default('30m'),
     LLM_MODEL: z.string().min(1).default('mistral-nemo:12b-instruct-2407-q4_K_M'),
     LLM_API_KEY: optionalString,
 
@@ -53,12 +56,21 @@ const ConfigSchema = z
     CHARACTERS_DIR: z.string().default('./characters'),
     USER_NAME: z.string().min(1).max(64).default('User'),
     // e.g. "French". Empty = no constraint (the model follows the card/user).
-    REPLY_LANGUAGE: optionalString.pipe(z.string().max(40).regex(/^[\p{L} ()-]+$/u, 'letters only').optional()),
+    REPLY_LANGUAGE: optionalString.pipe(
+      z
+        .string()
+        .max(40)
+        .regex(/^[\p{L} ()-]+$/u, 'letters only')
+        .optional(),
+    ),
 
     DATA_DIR: z.string().default('./data'),
     MEMORY_ENABLED: booleanFlag(true),
     // Empty = no embeddings (memories are then picked by recency only).
-    EMBEDDING_MODEL: z.string().optional().transform((v) => (v === undefined ? 'paraphrase-multilingual' : v.trim() || undefined)),
+    EMBEDDING_MODEL: z
+      .string()
+      .optional()
+      .transform((v) => (v === undefined ? 'paraphrase-multilingual' : v.trim() || undefined)),
     EMBEDDING_BASE_URL: optionalString.pipe(z.string().url().optional()),
     MEMORY_TOP_K: z.coerce.number().int().min(1).max(30).default(8),
     MEMORY_EXTRACT_EVERY: z.coerce.number().int().min(2).max(50).default(4),
@@ -67,26 +79,46 @@ const ConfigSchema = z
     MODELS_DIR: z.string().default('./models'),
     STT_MODEL: z.enum(STT_MODEL_IDS).default('whisper-base'),
     // ISO 639-1 code ("fr"); empty = Whisper detects the language itself.
-    STT_LANGUAGE: z.string().trim().regex(/^([a-z]{2})?$/, 'two-letter code like fr, or empty').default(''),
+    STT_LANGUAGE: z
+      .string()
+      .trim()
+      .regex(/^([a-z]{2})?$/, 'two-letter code like fr, or empty')
+      .default(''),
     TTS_VOICE: z.enum(TTS_VOICE_IDS).default('fr-siwis'),
     TTS_SPEED: z.coerce.number().min(0.5).max(2).default(1),
     VOICE_THREADS: z.coerce.number().int().min(1).max(16).default(4),
 
     IMAGES_ENABLED: booleanFlag(true),
     COMFYUI_URL: z.string().url().default('http://127.0.0.1:8188'),
+    // Optional: ComfyUI install folder, so the launcher (start.bat) can start it.
+    COMFYUI_DIR: optionalString,
     // File name of an SDXL checkpoint in ComfyUI/models/checkpoints. Empty = no images.
-    IMAGE_CHECKPOINT: optionalString.pipe(z.string().max(255).regex(/^[\w .()\/\\-]+$/, 'invalid file name').optional()),
+    IMAGE_CHECKPOINT: optionalString.pipe(
+      z
+        .string()
+        .max(255)
+        .regex(/^[\w .()/\\-]+$/, 'invalid file name')
+        .optional(),
+    ),
     IMAGE_WIDTH: z.coerce.number().int().min(512).max(2048).multipleOf(8).default(832),
     IMAGE_HEIGHT: z.coerce.number().int().min(512).max(2048).multipleOf(8).default(1216),
     IMAGE_STEPS: z.coerce.number().int().min(1).max(100).default(25),
     IMAGE_CFG: z.coerce.number().min(1).max(20).default(5.5),
-    IMAGE_SAMPLER: z.string().regex(/^[a-z0-9_]+$/).default('dpmpp_2m'),
-    IMAGE_SCHEDULER: z.string().regex(/^[a-z0-9_]+$/).default('karras'),
+    IMAGE_SAMPLER: z
+      .string()
+      .regex(/^[a-z0-9_]+$/)
+      .default('dpmpp_2m'),
+    IMAGE_SCHEDULER: z
+      .string()
+      .regex(/^[a-z0-9_]+$/)
+      .default('karras'),
     IMAGE_STYLE: z.string().max(500).default('photograph, realistic, natural light, 35mm, sharp focus'),
     IMAGE_NEGATIVE_PROMPT: z
       .string()
       .max(1000)
-      .default('lowres, blurry, bad anatomy, bad hands, extra fingers, deformed face, watermark, text, signature, cartoon'),
+      .default(
+        'lowres, blurry, bad anatomy, bad hands, extra fingers, deformed face, watermark, text, signature, cartoon',
+      ),
   })
   .refine((c) => c.MAX_REPLY_TOKENS < c.CONTEXT_TOKENS / 2, {
     message: 'MAX_REPLY_TOKENS must be less than half of CONTEXT_TOKENS',
@@ -127,6 +159,8 @@ export type AppConfig = Readonly<{
   images: Readonly<{
     enabled: boolean;
     comfyUrl: string;
+    /** ComfyUI install folder (used by the launcher only). */
+    comfyDir: string | undefined;
     /** DATA_DIR/images */
     dir: string;
     checkpoint: string | undefined;
@@ -159,9 +193,7 @@ export type AppConfig = Readonly<{
 export function parseConfig(env: NodeJS.ProcessEnv): AppConfig {
   const result = ConfigSchema.safeParse(env);
   if (!result.success) {
-    const details = result.error.issues
-      .map((i) => `  - ${i.path.join('.') || '(root)'}: ${i.message}`)
-      .join('\n');
+    const details = result.error.issues.map((i) => `  - ${i.path.join('.') || '(root)'}: ${i.message}`).join('\n');
     throw new Error(`Invalid configuration:\n${details}`);
   }
   const c = result.data;
@@ -198,6 +230,7 @@ export function parseConfig(env: NodeJS.ProcessEnv): AppConfig {
     images: Object.freeze({
       enabled: c.IMAGES_ENABLED,
       comfyUrl: c.COMFYUI_URL.replace(/\/+$/, ''),
+      comfyDir: c.COMFYUI_DIR,
       dir: join(c.DATA_DIR, 'images'),
       checkpoint: c.IMAGE_CHECKPOINT,
       width: c.IMAGE_WIDTH,

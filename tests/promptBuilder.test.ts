@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { applyMacros, buildPrompt, buildSystemPrompt, DEFAULT_SYSTEM_PROMPT, PromptTooLargeError } from '../src/prompt/promptBuilder.js';
+import {
+  applyMacros,
+  buildPrompt,
+  buildSystemPrompt,
+  DEFAULT_SYSTEM_PROMPT,
+  PromptTooLargeError,
+} from '../src/prompt/promptBuilder.js';
 import type { ChatMessage } from '../src/llm/types.js';
 import { makeCharacter } from './helpers.js';
 

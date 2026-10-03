@@ -61,9 +61,7 @@ export class SqliteSessionStore implements SessionStore {
     private readonly now: () => Date = () => new Date(),
   ) {
     this.stmt = {
-      insertSession: db.prepare(
-        'INSERT INTO sessions (id, character_id, created_at, updated_at) VALUES (?, ?, ?, ?)',
-      ),
+      insertSession: db.prepare('INSERT INTO sessions (id, character_id, created_at, updated_at) VALUES (?, ?, ?, ?)'),
       getSession: db.prepare('SELECT * FROM sessions WHERE id = ?'),
       getMessages: db.prepare(
         'SELECT seq, id, role, content, image_id, created_at FROM messages WHERE session_id = ? ORDER BY seq',
