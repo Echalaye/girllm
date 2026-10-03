@@ -1,0 +1,12 @@
+node_modules/
+dist/
+coverage/
+.env
+.env.*
+!.env.example
+*.log
+# Local data (conversations, future SQLite DB) - personal, never commit
+data/
+
+# Downloaded voice models (npm run setup:voice)
+models/

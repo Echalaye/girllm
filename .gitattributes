@@ -1,0 +1,6 @@
+# Normalise line endings in the repo (LF), whatever the OS/editor.
+* text=auto eol=lf
+# Windows batch files must keep CRLF to run correctly.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.png binary
