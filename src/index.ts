@@ -106,6 +106,7 @@ async function main(): Promise<void> {
             scheduler: img.scheduler,
             style: img.style,
             negative: img.negative,
+            hires: img.hires,
           },
         },
       )

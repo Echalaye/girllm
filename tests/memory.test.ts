@@ -94,7 +94,7 @@ describe('buildQuery / buildMemoryBlock', () => {
     const block = buildMemoryBlock({ summary: 'They met.', memories: ['U likes tea'], mood: 'happy' }, 'Aria', 'U');
     expect(block).toContain('- U likes tea');
     expect(block).toContain('[Story so far]\nThey met.');
-    expect(block).toContain("[Aria's current mood: happy]");
+    expect(block).not.toContain('happy'); // the mood lives in the [Right now] block
   });
 });
 

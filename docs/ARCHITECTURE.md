@@ -169,8 +169,34 @@ Error statuses: `400` invalid input · `403` cross-origin · `404` not found · 
 | `scripts/launch.ts` + `start.bat`                     | Launcher: start Ollama and ComfyUI if needed, rebuild if stale, start girllm, open the browser, stop on Ctrl+C what it started |
 | `scripts/launcherLib.ts`                              | Testable launcher helpers (ComfyUI layout detection, staleness, readiness polling)                                             |
 
+## Prompt layout (4b)
+
+```
+[system]   style instructions (texting | roleplay)  ·  [Character]  ·  [Example dialogue]
+           [Story so far]  ·  [What she remembers]  ·  [Right now: date/time, pause, mood]
+           [Reminders: recent openings, overused phrases, language, card's post-history notes]
+[assistant/user …]  recent history
+[user]     the new message   ← ALWAYS last
+```
+
+Exactly one system message, and the conversation always ends with the user. Templates differ: Ollama's Mistral
+template inserts `$.System` only when the last message is the user's. Before 4b, the `(Reply in French.)`
+reminder was sent as a trailing system message, so Mistral Nemo **silently lost the whole system prompt** (card,
+memories, summary) whenever `REPLY_LANGUAGE` was set. A regression test (`prompt layout invariants`) now checks
+this rule in every configuration.
+
+| Module                                       | Role                                                                                                              |
+| -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `src/prompt/styleGuard.ts`                   | Openings of the last replies and phrases repeated across them (4-grams, ignoring stopwords, _actions_ and emojis) |
+| `src/prompt/timeContext.ts`                  | Localised date/time, readable durations, thresholds for mentioning a pause                                        |
+| `scripts/compareLib.ts` / `compareModels.ts` | `npm run compare`: fixed French scenarios through the real prompt builder, with timing and automatic checks       |
+
 ## Design decisions
 
+- **Time and reminders in the system prompt, recomputed each turn**: they cost a few tokens but fix the two most
+  "robotic" behaviours of small models (no sense of time, looping on the same openings).
+- **Hires pass in pixel space** (Lanczos upscale, then a low-denoise resample) rather than latent upscaling: it keeps
+  the composition at low denoise and adds the detail SDXL portraits lack at 1 megapixel.
 - **Unloading the LLM for each photo** instead of running both at once: a 12B Q4 model plus SDXL needs more than
   8 GB. The `GpuGate` makes the handover safe, because no LLM call (chat, memory tasks, other chats) can sneak in
   and reload the model in the middle of an image.

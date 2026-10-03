@@ -22,7 +22,8 @@
     "character_version": "1.0",
     "extensions": {
       "girllm": {
-        "appearance": "woman, 18 years old, shoulder-length wavy auburn hair, green eyes, light freckles, slim athletic build, warm smile"
+        "appearance": "woman, 26 years old, shoulder-length wavy auburn hair, green eyes, light freckles across the nose, slim athletic build, warm smile",
+        "style": "texting"
       }
     }
   }

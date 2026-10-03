@@ -15,6 +15,9 @@ const optionalString = z
   .optional()
   .transform((v) => (v && v.trim() !== '' ? v.trim() : undefined));
 
+/** Treat "" (an empty line in .env) as "not set", so the default applies. */
+const blankAsUnset = (v: unknown) => (typeof v === 'string' && v.trim() === '' ? undefined : v);
+
 /** "true"/"false"/"1"/"0" (case-insensitive) -> boolean. */
 const booleanFlag = (defaultValue: boolean) =>
   z
@@ -112,13 +115,31 @@ const ConfigSchema = z
       .string()
       .regex(/^[a-z0-9_]+$/)
       .default('karras'),
-    IMAGE_STYLE: z.string().max(500).default('photograph, realistic, natural light, 35mm, sharp focus'),
-    IMAGE_NEGATIVE_PROMPT: z
-      .string()
-      .max(1000)
-      .default(
-        'lowres, blurry, bad anatomy, bad hands, extra fingers, deformed face, watermark, text, signature, cartoon',
-      ),
+    // Tuned for realistic "sent from a phone" photos; see README for an anime variant.
+    IMAGE_STYLE: z.preprocess(
+      blankAsUnset,
+      z
+        .string()
+        .max(500)
+        .default(
+          'candid smartphone photo, RAW photo, natural skin texture, realistic lighting, shallow depth of field, subtle film grain',
+        ),
+    ),
+    IMAGE_NEGATIVE_PROMPT: z.preprocess(
+      blankAsUnset,
+      z
+        .string()
+        .max(1000)
+        .default(
+          'cgi, 3d render, illustration, painting, drawing, anime, plastic skin, airbrushed, oversaturated, lowres, blurry, ' +
+            'jpeg artifacts, bad anatomy, bad hands, extra fingers, missing fingers, deformed face, asymmetric eyes, ' +
+            'cross-eyed, watermark, text, logo, signature, multiple people',
+        ),
+    ),
+    // Second refinement pass: 1 = off, 1.25 = +25% resolution with re-sampling (sharper, ~1.6x slower).
+    IMAGE_HIRES_SCALE: z.coerce.number().min(1).max(2).default(1.25),
+    IMAGE_HIRES_DENOISE: z.coerce.number().min(0.1).max(0.7).default(0.35),
+    IMAGE_HIRES_STEPS: z.coerce.number().int().min(4).max(60).default(15),
   })
   .refine((c) => c.MAX_REPLY_TOKENS < c.CONTEXT_TOKENS / 2, {
     message: 'MAX_REPLY_TOKENS must be less than half of CONTEXT_TOKENS',
@@ -172,6 +193,7 @@ export type AppConfig = Readonly<{
     scheduler: string;
     style: string;
     negative: string;
+    hires: Readonly<{ scale: number; denoise: number; steps: number }>;
   }>;
   voice: Readonly<{
     enabled: boolean;
@@ -241,6 +263,7 @@ export function parseConfig(env: NodeJS.ProcessEnv): AppConfig {
       scheduler: c.IMAGE_SCHEDULER,
       style: c.IMAGE_STYLE.trim(),
       negative: c.IMAGE_NEGATIVE_PROMPT.trim(),
+      hires: Object.freeze({ scale: c.IMAGE_HIRES_SCALE, denoise: c.IMAGE_HIRES_DENOISE, steps: c.IMAGE_HIRES_STEPS }),
     }),
     voice: Object.freeze({
       enabled: c.VOICE_ENABLED,

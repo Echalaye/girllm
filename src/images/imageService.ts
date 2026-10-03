@@ -23,7 +23,7 @@ import {
   ImageRefusedError,
   MINOR_NEGATIVE_TERMS,
 } from './safety.js';
-import { buildTxt2ImgWorkflow } from './workflow.js';
+import { buildTxt2ImgWorkflow, type HiresParams } from './workflow.js';
 
 /** Marks a user message that is a photo request (shown in the chat as "📷 …"). */
 export const PHOTO_REQUEST_PREFIX = '📷 ';
@@ -40,6 +40,8 @@ export interface ImageSettings {
   /** Style tags prepended to every prompt ("photo, realistic…"). */
   style: string;
   negative: string;
+  /** Optional second refinement pass (scale <= 1 = off). */
+  hires?: HiresParams | undefined;
 }
 
 export interface ImageServiceOptions {
@@ -47,6 +49,8 @@ export interface ImageServiceOptions {
   replyLanguage?: string | undefined;
   imagesDir: string;
   settings: ImageSettings;
+  /** Clock (injectable for tests). */
+  now?: () => Date;
 }
 
 export interface ImageLogger {
@@ -113,10 +117,14 @@ export class ImageService {
       summary: session.summary,
       request,
       language: this.opts.replyLanguage,
+      now: (this.opts.now ?? (() => new Date()))(),
     });
     signal?.throwIfAborted();
 
-    const positive = [ADULT_POSITIVE_TERMS, s.style, character.appearance, idea.scene].filter(Boolean).join(', ');
+    // Order matters for CLIP: the most important tokens come first.
+    const positive = [ADULT_POSITIVE_TERMS, 'solo', s.style, character.appearance, idea.scene]
+      .filter(Boolean)
+      .join(', ');
     assertSafe(idea.scene, positive);
     const negative = [s.negative, MINOR_NEGATIVE_TERMS].filter(Boolean).join(', ');
     const seed = randomInt(0, 2 ** 47);
@@ -139,6 +147,7 @@ export class ImageService {
             cfg: s.cfg,
             sampler: s.sampler,
             scheduler: s.scheduler,
+            hires: s.hires,
           }),
           signal,
         );

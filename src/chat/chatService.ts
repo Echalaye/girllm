@@ -20,6 +20,8 @@ export interface ChatServiceOptions {
   repeatPenalty?: number | undefined;
   /** Force replies in this language (e.g. "French"). */
   replyLanguage?: string | undefined;
+  /** Clock (injectable for tests). */
+  now?: () => Date;
 }
 
 export interface ReplyResult {
@@ -137,6 +139,7 @@ export class ChatService {
     const prompt = buildPrompt(character, history, this.opts.userName, this.opts.budget, {
       replyLanguage: this.opts.replyLanguage,
       memory,
+      time: { now: (this.opts.now ?? (() => new Date()))(), previousMessageAt: previousMessageTime(session.messages) },
     });
 
     let reply = '';
@@ -182,4 +185,14 @@ export class ChatService {
       this.busy.delete(sessionId);
     }
   }
+}
+
+/**
+ * When was the message BEFORE the user's latest one sent? (to measure the
+ * pause the user just made). Undefined for the first exchange.
+ */
+export function previousMessageTime(messages: readonly StoredMessage[]): Date | undefined {
+  const lastUser = messages.findLastIndex((m) => m.role === 'user');
+  const previous = lastUser > 0 ? messages[lastUser - 1] : undefined;
+  return previous ? new Date(previous.createdAt) : undefined;
 }
