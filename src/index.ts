@@ -2,6 +2,8 @@
  * Entry point: load config, wire dependencies, start the HTTP server.
  */
 import { CharacterRepository } from './characters/characterRepository.js';
+import { CharacterService } from './characters/characterService.js';
+import { FaceStore } from './characters/faceStore.js';
 import { ChatService } from './chat/chatService.js';
 import { SqliteSessionStore } from './chat/sqliteSessionStore.js';
 import { isLoopbackHost, loadConfig } from './config.js';
@@ -18,19 +20,32 @@ import { ImageService } from './images/imageService.js';
 import { ImageStore } from './images/imageStore.js';
 import { GatedEmbeddingProvider, GatedLlmProvider } from './llm/gated.js';
 import { GpuGate } from './util/gpuGate.js';
+import { defaultsFromConfig } from './settings/settingsSchema.js';
+import { SettingsService } from './settings/settingsService.js';
 
 async function main(): Promise<void> {
   const config = loadConfig();
   const { contextTokens, maxReplyTokens } = config.generation;
 
+  const db = openDatabase(config.databasePath);
+  const sessions = new SqliteSessionStore(db);
+
+  // Live settings: .env gives the defaults, the settings panel overrides
+  // them. Services call S() when they need a value, so changes apply to the
+  // next message without a restart.
+  const settings = new SettingsService(db, defaultsFromConfig(config), Math.floor(contextTokens / 2));
+  const S = () => settings.get();
+  const language = () => S().replyLanguage || undefined;
+
   // Every LLM/embedding call goes through the GPU gate, so they pause while
   // an image is generated (the LLM is unloaded during that time).
   const gpu = new GpuGate();
-  const llm = new GatedLlmProvider(createLlmProvider(config), gpu);
+  const llm = new GatedLlmProvider(
+    createLlmProvider(config, () => S().llmModel),
+    gpu,
+  );
   const rawEmbeddings = createEmbeddingProvider(config);
   const embeddings = rawEmbeddings ? new GatedEmbeddingProvider(rawEmbeddings, gpu) : undefined;
-  const db = openDatabase(config.databasePath);
-  const sessions = new SqliteSessionStore(db);
 
   // Temporary console logger until Fastify's (pino) logger exists.
   const bootLog = {
@@ -70,16 +85,16 @@ async function main(): Promise<void> {
 
   const memoryStore = new MemoryStore(db);
   const memory = config.memory.enabled
-    ? new MemoryService(sessions, characters, memoryStore, llm, embeddings, memoryLog, {
-        userName: config.userName,
-        replyLanguage: config.replyLanguage,
+    ? new MemoryService(sessions, characters, memoryStore, llm, embeddings, memoryLog, () => ({
+        userName: S().userName,
+        replyLanguage: language(),
         summaryPolicy: defaultSummaryPolicy(contextTokens, maxReplyTokens),
         topK: config.memory.topK,
         memoryTokenBudget: Math.floor(contextTokens * 0.1),
         extractEvery: config.memory.extractEvery,
         duplicateThreshold: 0.9,
         minRelevance: 0.3,
-      })
+      }))
     : undefined;
 
   const { images: img } = config;
@@ -92,22 +107,25 @@ async function main(): Promise<void> {
         new ComfyClient({ baseUrl: img.comfyUrl }),
         gpu,
         memoryLog,
-        {
-          userName: config.userName,
-          replyLanguage: config.replyLanguage,
-          imagesDir: img.dir,
-          settings: {
-            checkpoint: img.checkpoint,
-            width: img.width,
-            height: img.height,
-            steps: img.steps,
-            cfg: img.cfg,
-            sampler: img.sampler,
-            scheduler: img.scheduler,
-            style: img.style,
-            negative: img.negative,
-            hires: img.hires,
-          },
+        () => {
+          const s = S();
+          return {
+            userName: s.userName,
+            replyLanguage: language(),
+            imagesDir: img.dir,
+            settings: {
+              checkpoint: s.imageCheckpoint || undefined,
+              width: img.width,
+              height: img.height,
+              steps: s.imageSteps,
+              cfg: s.imageCfg,
+              sampler: s.imageSampler,
+              scheduler: s.imageScheduler,
+              style: s.imageStyle,
+              negative: s.imageNegative,
+              hires: { scale: s.imageHiresScale, denoise: s.imageHiresDenoise, steps: s.imageHiresSteps },
+            },
+          };
         },
       )
     : undefined;
@@ -116,34 +134,42 @@ async function main(): Promise<void> {
     characters,
     sessions,
     llm,
-    {
-      userName: config.userName,
-      budget: { contextTokens, maxReplyTokens },
-      temperature: config.generation.temperature,
-      topP: config.generation.topP,
-      minP: config.generation.minP,
-      repeatPenalty: config.generation.repeatPenalty,
-      replyLanguage: config.replyLanguage,
+    () => {
+      const s = S();
+      return {
+        userName: s.userName,
+        budget: { contextTokens, maxReplyTokens: s.maxReplyTokens },
+        temperature: s.temperature,
+        topP: s.topP,
+        minP: s.minP,
+        repeatPenalty: s.repeatPenalty,
+        replyLanguage: language(),
+      };
     },
     memory,
     images,
   );
 
+  // Character editor: deleting a character cascades to its chats, photos,
+  // memories and reference face.
+  const faces = new FaceStore(config.facesDir);
+  const characterService = new CharacterService(characters, chat, sessions, memoryStore, faces);
+
   const { voice: v } = config;
   const voice: VoiceServices | undefined = v.enabled
     ? {
-        stt: new SherpaSpeechToText({
+        stt: new SherpaSpeechToText(() => ({
           modelsDir: v.modelsDir,
           model: v.sttModel,
-          language: v.sttLanguage,
+          language: S().sttLanguage,
           numThreads: v.threads,
-        }),
-        tts: new SherpaTextToSpeech({
+        })),
+        tts: new SherpaTextToSpeech(() => ({
           modelsDir: v.modelsDir,
-          voice: v.ttsVoice,
-          speed: v.ttsSpeed,
+          voice: S().ttsVoice,
+          speed: S().ttsSpeed,
           numThreads: v.threads,
-        }),
+        })),
       }
     : undefined;
 
@@ -155,20 +181,37 @@ async function main(): Promise<void> {
     memoryStore,
     voice,
     images,
+    characterService,
+    faces,
+    settings,
+    voiceModelsDir: v.modelsDir,
     allowedHosts,
-    userName: config.userName,
+    userName: () => S().userName,
     logger: { level: process.env.LOG_LEVEL ?? 'info' },
   });
   log = app.log;
+
+  // Switching models from the settings: free the old one's VRAM right away.
+  settings.onChange((current, previous) => {
+    if (current.llmModel !== previous.llmModel) {
+      app.log.info(`Model changed: ${previous.llmModel} → ${current.llmModel}`);
+      llm.unload(previous.llmModel).catch((err: unknown) => {
+        app.log.warn({ err }, 'could not unload the previous model');
+      });
+    }
+  });
+  if (settings.overriddenKeys().length) {
+    app.log.info(`Settings changed from the app (override .env): ${settings.overriddenKeys().join(', ')}`);
+  }
 
   if (!isLoopbackHost(config.host)) {
     app.log.warn(`Listening on ${config.host}: the API has NO authentication. Only do this on a trusted network.`);
   }
   app.log.info(
-    `LLM: ${config.llm.model} via ${config.llm.provider} (${config.llm.baseUrl}), context ${contextTokens} tokens`,
+    `LLM: ${S().llmModel} via ${config.llm.provider} (${config.llm.baseUrl}), context ${contextTokens} tokens`,
   );
   app.log.info(`Database: ${config.databasePath}`);
-  app.log.info(`Reply language: ${config.replyLanguage ?? 'not forced'}`);
+  app.log.info(`Reply language: ${S().replyLanguage || 'not forced'}`);
   app.log.info(
     config.memory.enabled
       ? `Memory: on (embeddings: ${config.memory.embeddingModel ?? 'off, recency only'})`
@@ -204,8 +247,8 @@ async function main(): Promise<void> {
   } else if (health.models) {
     // Ollama lists models as "name:tag"; accept an implicit ":latest".
     const has = (name: string) => health.models!.some((m) => m === name || m === `${name}:latest`);
-    if (!has(config.llm.model)) {
-      app.log.warn(`Model "${config.llm.model}" not found on the backend. Run: ollama pull ${config.llm.model}`);
+    if (!has(S().llmModel)) {
+      app.log.warn(`Model "${S().llmModel}" not found on the backend. Run: ollama pull ${S().llmModel}`);
     }
     if (config.memory.enabled && config.memory.embeddingModel && !has(config.memory.embeddingModel)) {
       app.log.warn(

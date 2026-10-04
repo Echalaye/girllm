@@ -84,7 +84,9 @@ describe('HTTP API', () => {
   it('lists characters without internal fields', async () => {
     await makeApp();
     const res = await app.inject({ method: 'GET', url: '/api/characters', headers: { host: HOST } });
-    expect(res.json()).toEqual([{ id: 'aria', name: 'Aria', creatorNotes: '', tags: [] }]);
+    expect(res.json()).toEqual([
+      { id: 'aria', name: 'Aria', creatorNotes: '', tags: [], style: 'roleplay', hasFace: false },
+    ]);
   });
 
   it('validates input', async () => {
@@ -340,5 +342,64 @@ describe('HTTP API - photos', () => {
     expect(
       (await app.inject({ method: 'GET', url: '/api/images/status', headers: { host: HOST } })).json().reason,
     ).toMatch(/^disabled/);
+  });
+});
+
+describe('HTTP API - settings', () => {
+  async function makeSettingsApp() {
+    const { SettingsService } = await import('../src/settings/settingsService.js');
+    const { defaultsFromConfig } = await import('../src/settings/settingsSchema.js');
+    const { parseConfig } = await import('../src/config.js');
+    const llm = new FakeLlm();
+    const characters = CharacterRepository.fromCharacters([makeCharacter()]);
+    const { db, store } = makeStore();
+    const settings = new SettingsService(db, defaultsFromConfig(parseConfig({ USER_NAME: 'Etienne' })), 4096);
+    const chat = new ChatService(characters, store, llm, {
+      userName: 'Etienne',
+      budget: { contextTokens: 4096, maxReplyTokens: 200 },
+      temperature: 0.8,
+      topP: 0.9,
+    });
+    app = await buildApp({
+      chat,
+      characters,
+      llm,
+      memoryStore: new MemoryStore(db),
+      settings,
+      allowedHosts: [HOST],
+      userName: () => settings.get().userName,
+    });
+    return settings;
+  }
+
+  it('returns values, defaults and options (models from the backend, voices with install state)', async () => {
+    await makeSettingsApp();
+    const res = (await app.inject({ method: 'GET', url: '/api/settings', headers: { host: HOST } })).json();
+    expect(res.values.userName).toBe('Etienne');
+    expect(res.options.models).toEqual(['fake']);
+    expect(res.options.voices.find((v: { id: string }) => v.id === 'fr-siwis')).toMatchObject({ installed: false });
+  });
+
+  it('updates live (visible in /api/config), validates, and resets', async () => {
+    await makeSettingsApp();
+    const put = await app.inject({
+      method: 'PUT',
+      url: '/api/settings',
+      ...json({ userName: 'Tim', temperature: 0.9 }),
+    });
+    expect(put.json().overridden.sort()).toEqual(['temperature', 'userName']);
+    expect((await app.inject({ method: 'GET', url: '/api/config', headers: { host: HOST } })).json().userName).toBe(
+      'Tim',
+    );
+
+    const bad = await app.inject({ method: 'PUT', url: '/api/settings', ...json({ temperature: 'hot' }) });
+    expect(bad.statusCode).toBe(400);
+    expect(bad.json().error).toMatch(/temperature/);
+
+    const reset = await app.inject({ method: 'POST', url: '/api/settings/reset', ...json({ keys: ['userName'] }) });
+    expect(reset.json().overridden).toEqual(['temperature']);
+    expect(
+      (await app.inject({ method: 'POST', url: '/api/settings/reset', ...json({ keys: ['nope'] }) })).statusCode,
+    ).toBe(400);
   });
 });

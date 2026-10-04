@@ -64,6 +64,14 @@ export default tseslint.config(
     rules: { eqeqeq: ['error', 'always'] },
   },
 
+  // The microphone capture runs in the audio rendering thread.
+  {
+    files: ['public/**/*.worklet.js'],
+    languageOptions: {
+      globals: { AudioWorkletProcessor: 'readonly', registerProcessor: 'readonly', sampleRate: 'readonly' },
+    },
+  },
+
   // Config files run in Node.
   { files: ['*.config.js'], languageOptions: { globals: globals.node } },
 

@@ -95,3 +95,41 @@ export function readAppearance(extensions: Record<string, unknown>): string {
   const appearance = (girllm as { appearance?: unknown }).appearance;
   return typeof appearance === 'string' ? appearance.trim().slice(0, MAX_APPEARANCE_CHARS) : '';
 }
+
+/**
+ * What the character editor sends. Same limits as the card format, plus
+ * girllm's own fields (style, appearance).
+ */
+export const CharacterInputSchema = z.object({
+  name: z.string().trim().min(1).max(100),
+  description: z.string().max(20_000).default(''),
+  personality: z.string().max(5_000).default(''),
+  scenario: z.string().max(5_000).default(''),
+  first_mes: z.string().max(10_000).default(''),
+  mes_example: z.string().max(20_000).default(''),
+  system_prompt: z.string().max(10_000).default(''),
+  post_history_instructions: z.string().max(5_000).default(''),
+  creator_notes: z.string().max(10_000).default(''),
+  tags: z.array(z.string().trim().min(1).max(40)).max(20).default([]),
+  style: z.enum(CHARACTER_STYLES).default('roleplay'),
+  appearance: z.string().trim().max(MAX_APPEARANCE_CHARS).default(''),
+});
+export type CharacterInput = z.infer<typeof CharacterInputSchema>;
+
+/** Editable view of a character (what the editor loads). */
+export function toInput(c: Character): CharacterInput {
+  return {
+    name: c.name,
+    description: c.description,
+    personality: c.personality,
+    scenario: c.scenario,
+    first_mes: c.first_mes,
+    mes_example: c.mes_example,
+    system_prompt: c.system_prompt,
+    post_history_instructions: c.post_history_instructions,
+    creator_notes: c.creator_notes,
+    tags: c.tags,
+    style: c.style,
+    appearance: c.appearance,
+  };
+}

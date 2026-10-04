@@ -170,6 +170,8 @@ export type AppConfig = Readonly<{
   replyLanguage: string | undefined;
   /** SQLite database file path. */
   databasePath: string;
+  /** DATA_DIR/faces: the characters' reference faces. */
+  facesDir: string;
   memory: Readonly<{
     enabled: boolean;
     embeddingModel: string | undefined;
@@ -242,6 +244,7 @@ export function parseConfig(env: NodeJS.ProcessEnv): AppConfig {
     userName: c.USER_NAME,
     replyLanguage: c.REPLY_LANGUAGE,
     databasePath: join(c.DATA_DIR, 'girllm.db'),
+    facesDir: join(c.DATA_DIR, 'faces'),
     memory: Object.freeze({
       enabled: c.MEMORY_ENABLED,
       embeddingModel: c.EMBEDDING_MODEL,

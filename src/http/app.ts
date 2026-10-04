@@ -10,6 +10,7 @@
  *   - strict input validation (zod) and small body limits;
  *   - helmet security headers incl. a strict Content-Security-Policy.
  */
+import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import helmet from '@fastify/helmet';
@@ -28,7 +29,15 @@ import { MEMORY_CATEGORIES, type Memory, type MemoryStore } from '../memory/memo
 import { LlmHttpError, type LlmProvider } from '../llm/types.js';
 import { PromptTooLargeError } from '../prompt/promptBuilder.js';
 import { streamSse } from './sse.js';
-import { cleanForSpeech, MAX_TTS_CHARS } from '../voice/speechText.js';
+import { registerSettingsRoutes } from './routes/settingsRoutes.js';
+import { registerCharacterRoutes } from './routes/characterRoutes.js';
+import { CharacterRejectedError } from '../characters/characterRepository.js';
+import type { CharacterService } from '../characters/characterService.js';
+import type { FaceStore } from '../characters/faceStore.js';
+import { InvalidImageError } from '../images/imageSanitizer.js';
+import { SettingsValidationError, type SettingsService } from '../settings/settingsService.js';
+import { resolve, type Live } from '../util/resolve.js';
+import { cleanForSpeech, cleanTranscript, MAX_TTS_CHARS } from '../voice/speechText.js';
 import { VoiceUnavailableError, type VoiceServices, type VoiceStatus } from '../voice/types.js';
 import { decodeFloat32, encodeWav16 } from '../voice/wav.js';
 
@@ -43,13 +52,31 @@ export interface AppDeps {
   voice?: VoiceServices | undefined;
   /** Undefined when IMAGES_ENABLED=false. */
   images?: ImageService | undefined;
+  /** Character editor (optional so tests can build a minimal app). */
+  characterService?: CharacterService | undefined;
+  /** Reference faces (data/faces). */
+  faces?: FaceStore | undefined;
+  /** Live settings (optional so tests can build a minimal app). */
+  settings?: SettingsService | undefined;
+  /** MODELS_DIR (voice models), for the settings' voice list. */
+  voiceModelsDir?: string;
   /** Hosts allowed in the Host/Origin headers, e.g. ["127.0.0.1:3210"]. */
   allowedHosts: string[];
-  userName: string;
+  /** Fixed name, or a function returning the current one (live settings). */
+  userName: Live<string>;
   logger?: FastifyServerOptions['logger'];
 }
 
 const PUBLIC_DIR = fileURLToPath(new URL('../../public/', import.meta.url));
+/**
+ * The UI typeface (Bricolage Grotesque, SIL OFL), served from the npm
+ * package so no font binary lives in the repo and nothing is fetched from
+ * a CDN (the app works offline and the CSP stays 'self'). Same relative
+ * path from src/http and dist/http.
+ */
+const FONT_DIR = fileURLToPath(
+  new URL('../../node_modules/@fontsource-variable/bricolage-grotesque/files/', import.meta.url),
+);
 
 // ---- Input schemas -------------------------------------------------------
 const CharacterId = z.string().regex(/^[a-z0-9-]{1,80}$/);
@@ -103,6 +130,9 @@ function httpError(err: unknown): { status: number; message: string } {
   if (err instanceof NotFoundError) return { status: 404, message: err.message };
   if (err instanceof SessionBusyError) return { status: 409, message: err.message };
   if (err instanceof PromptTooLargeError) return { status: 413, message: err.message };
+  if (err instanceof SettingsValidationError) return { status: 400, message: err.message };
+  if (err instanceof CharacterRejectedError) return { status: 422, message: err.message };
+  if (err instanceof InvalidImageError) return { status: 400, message: err.message };
   if (err instanceof VoiceUnavailableError) return { status: 503, message: err.message };
   if (err instanceof ImageUnavailableError) return { status: 503, message: err.message };
   if (err instanceof ImageRefusedError) return { status: 422, message: err.message };
@@ -167,7 +197,27 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     void reply.code(status).send({ error: message });
   });
 
+  // Raw uploads: audio for /api/stt (4 MB, the default here), card files and
+  // face images (their routes raise the limit with a route-level bodyLimit,
+  // which takes precedence). JSON routes keep the 64 KB limit.
+  app.addContentTypeParser(
+    'application/octet-stream',
+    { parseAs: 'buffer', bodyLimit: MAX_STT_BYTES },
+    (_req, body, done) => {
+      done(null, body);
+    },
+  );
+
   await app.register(fastifyStatic, { root: PUBLIC_DIR, prefix: '/' });
+  if (existsSync(FONT_DIR)) {
+    await app.register(fastifyStatic, {
+      root: FONT_DIR,
+      prefix: '/fonts/',
+      decorateReply: false, // already decorated by the first registration
+      allowedPath: (path) => path.endsWith('.woff2'),
+      maxAge: '30d',
+    });
+  }
 
   // ---- Routes ------------------------------------------------------------
 
@@ -176,9 +226,33 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     return { status: llm.ok ? 'ok' : 'degraded', llm };
   });
 
-  app.get('/api/config', async () => ({ userName: deps.userName, memoryEnabled: Boolean(deps.memory) }));
+  app.get('/api/config', async () => ({ userName: resolve(deps.userName), memoryEnabled: Boolean(deps.memory) }));
 
-  app.get('/api/characters', async () => deps.characters.list().map(toSummary));
+  if (deps.settings) {
+    registerSettingsRoutes(app, {
+      settings: deps.settings,
+      llm: deps.llm,
+      images: deps.images,
+      voiceModelsDir: deps.voiceModelsDir ?? './models',
+    });
+  }
+
+  app.get('/api/characters', async () =>
+    deps.characters.list().map((c) => ({
+      ...toSummary(c),
+      style: c.style,
+      hasFace: deps.faces?.get(c.id) !== undefined,
+    })),
+  );
+
+  if (deps.characterService && deps.faces) {
+    registerCharacterRoutes(app, {
+      characters: deps.characters,
+      characterService: deps.characterService,
+      faces: deps.faces,
+      images: deps.images,
+    });
+  }
 
   app.post('/api/sessions', async (request, reply) => {
     const { characterId } = CreateSessionBody.parse(request.body);
@@ -279,15 +353,6 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
 
   // ---- Voice -----------------------------------------------------------------
 
-  // Raw audio uploads for /api/stt (other routes keep the 64 KB JSON limit).
-  app.addContentTypeParser(
-    'application/octet-stream',
-    { parseAs: 'buffer', bodyLimit: MAX_STT_BYTES },
-    (_req, body, done) => {
-      done(null, body);
-    },
-  );
-
   const voiceDisabled = { available: false, model: '', reason: 'disabled (VOICE_ENABLED=false)' };
 
   app.get('/api/voice', async (): Promise<VoiceStatus> => ({
@@ -307,7 +372,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     const samples = decodeFloat32(request.body);
     if (samples.length < STT_SAMPLE_RATE * MIN_STT_SECONDS) return { text: '' }; // just a click
     const text = await deps.voice.stt.transcribe({ samples, sampleRate: STT_SAMPLE_RATE });
-    return { text };
+    return { text: cleanTranscript(text) };
   });
 
   /** Body: { text }. Returns a WAV file (or 204 if nothing is speakable). */

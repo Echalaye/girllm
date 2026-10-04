@@ -10,13 +10,15 @@
  *  - `keep_alive`: how long the model stays in VRAM, and explicit unloading
  *    (needed later to free VRAM for image generation).
  */
+import { resolve, type Live } from '../util/resolve.js';
 import { parseNdjson } from './ndjson.js';
 import { LlmHttpError, type ChatMessage, type GenerationOptions, type LlmProvider } from './types.js';
 
 export interface OllamaProviderOptions {
   /** e.g. http://127.0.0.1:11434 (no trailing slash) */
   baseUrl: string;
-  model: string;
+  /** Model name, or a function returning the current one (changeable from the settings). */
+  model: Live<string>;
   /**
    * Context window. Must be IDENTICAL for every request: Ollama reloads the
    * model whenever num_ctx changes, so it is fixed per provider instance.
@@ -59,7 +61,7 @@ export class OllamaProvider implements LlmProvider {
         headers: { 'Content-Type': 'application/json' },
         signal,
         body: JSON.stringify({
-          model: this.opts.model,
+          model: this.model,
           messages,
           stream: true,
           keep_alive: this.opts.keepAlive,
@@ -104,13 +106,21 @@ export class OllamaProvider implements LlmProvider {
     }
   }
 
-  /** Free the model's VRAM now (e.g. before running an image model). */
-  async unload(): Promise<void> {
+  /** Current model name. */
+  get model(): string {
+    return resolve(this.opts.model);
+  }
+
+  /**
+   * Free a model's VRAM now (e.g. before running an image model).
+   * @param model defaults to the current model.
+   */
+  async unload(model?: string): Promise<void> {
     const res = await this.fetchImpl(`${this.opts.baseUrl}/api/generate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       signal: AbortSignal.timeout(10_000),
-      body: JSON.stringify({ model: this.opts.model, keep_alive: 0 }),
+      body: JSON.stringify({ model: model ?? this.model, keep_alive: 0 }),
     });
     if (!res.ok) throw new LlmHttpError(res.status, `Ollama unload failed (${res.status})`);
   }

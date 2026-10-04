@@ -50,6 +50,8 @@ export interface SessionStore {
   create(characterId: string, greeting?: string): Session;
   get(id: string): Session | undefined;
   listByCharacter(characterId: string, limit?: number): SessionListItem[];
+  /** Every session id of a character (no limit), e.g. to delete them all. */
+  listIdsByCharacter(characterId: string): string[];
   /** @returns false if the session did not exist. */
   delete(id: string): boolean;
   appendMessage(sessionId: string, role: StoredMessage['role'], content: string, imageId?: string): StoredMessage;

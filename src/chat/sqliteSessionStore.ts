@@ -72,6 +72,7 @@ export class SqliteSessionStore implements SessionStore {
         FROM sessions s WHERE s.character_id = ?
         ORDER BY s.updated_at DESC LIMIT ?`),
       deleteSession: db.prepare('DELETE FROM sessions WHERE id = ?'),
+      idsByCharacter: db.prepare('SELECT id FROM sessions WHERE character_id = ?'),
       insertMessage: db.prepare(
         'INSERT INTO messages (id, session_id, role, content, image_id, created_at) VALUES (?, ?, ?, ?, ?, ?)',
       ),
@@ -125,6 +126,10 @@ export class SqliteSessionStore implements SessionStore {
       updatedAt: r.updated_at,
       messageCount: r.message_count,
     }));
+  }
+
+  listIdsByCharacter(characterId: string): string[] {
+    return (this.stmt.idsByCharacter!.all(characterId) as Array<{ id: string }>).map((r) => r.id);
   }
 
   delete(id: string): boolean {

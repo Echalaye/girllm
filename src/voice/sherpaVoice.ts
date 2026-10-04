@@ -13,7 +13,8 @@ import { existsSync } from 'node:fs';
 // loaded lazily by loadSherpa() below.
 import type sherpaModule from 'sherpa-onnx-node';
 import type { OfflineRecognizer, OfflineTts } from 'sherpa-onnx-node';
-import { join, resolve } from 'node:path';
+import { join, resolve as resolvePath } from 'node:path';
+import { resolve, type Live } from '../util/resolve.js';
 import { Mutex } from '../util/mutex.js';
 import { STT_MODELS, TTS_VOICES, type SttModelId, type TtsVoiceId } from './catalog.js';
 import {
@@ -48,26 +49,36 @@ export interface SherpaSttOptions {
   numThreads: number;
 }
 
+/** Model files of a Whisper model inside MODELS_DIR. */
+function sttFiles(modelsDir: string, model: SttModelId) {
+  const m = STT_MODELS[model];
+  const dir = join(resolvePath(modelsDir), m.dir);
+  return {
+    encoder: join(dir, `${m.prefix}-encoder.int8.onnx`),
+    decoder: join(dir, `${m.prefix}-decoder.int8.onnx`),
+    tokens: join(dir, `${m.prefix}-tokens.txt`),
+  };
+}
+
 export class SherpaSpeechToText implements SpeechToText {
   private readonly mutex = new Mutex();
   private recognizer?: Promise<OfflineRecognizer>;
-  private readonly files: { encoder: string; decoder: string; tokens: string };
+  /** Options the loaded recognizer was built with (reload when they change). */
+  private loadedKey = '';
 
-  constructor(private readonly opts: SherpaSttOptions) {
-    const m = STT_MODELS[opts.model];
-    const dir = join(resolve(opts.modelsDir), m.dir);
-    this.files = {
-      encoder: join(dir, `${m.prefix}-encoder.int8.onnx`),
-      decoder: join(dir, `${m.prefix}-decoder.int8.onnx`),
-      tokens: join(dir, `${m.prefix}-tokens.txt`),
-    };
+  /** @param options fixed, or a function returning the current ones (live settings). */
+  constructor(private readonly options: Live<SherpaSttOptions>) {}
+
+  private get opts(): SherpaSttOptions {
+    return resolve(this.options);
   }
 
   status(): VoiceComponentStatus {
-    const missing = firstMissing(Object.values(this.files));
+    const { model, modelsDir } = this.opts;
+    const missing = firstMissing(Object.values(sttFiles(modelsDir, model)));
     return missing
-      ? { available: false, model: this.opts.model, reason: 'model not downloaded (run: npm run setup:voice)' }
-      : { available: true, model: this.opts.model };
+      ? { available: false, model, reason: 'model not downloaded (run: npm run setup:voice)' }
+      : { available: true, model };
   }
 
   transcribe(audio: AudioClip): Promise<string> {
@@ -81,28 +92,27 @@ export class SherpaSpeechToText implements SpeechToText {
   }
 
   private load() {
-    if (!this.recognizer) {
-      const { available, reason } = this.status();
-      if (!available) throw new VoiceUnavailableError(`Speech-to-text unavailable: ${reason}`);
-      this.recognizer = loadSherpa().then((sherpa) =>
-        sherpa.OfflineRecognizer.createAsync({
-          featConfig: { sampleRate: 16000, featureDim: 80 },
-          modelConfig: {
-            whisper: {
-              encoder: this.files.encoder,
-              decoder: this.files.decoder,
-              language: this.opts.language,
-              task: 'transcribe',
-            },
-            tokens: this.files.tokens,
-            numThreads: this.opts.numThreads,
-            provider: 'cpu',
-          },
-        }),
-      );
-      // A failed load must not be cached forever: allow a retry.
-      this.recognizer.catch(() => (this.recognizer = undefined));
-    }
+    const o = this.opts;
+    const key = `${o.model}|${o.language}|${o.numThreads}`;
+    if (this.recognizer && key === this.loadedKey) return this.recognizer;
+
+    const { available, reason } = this.status();
+    if (!available) throw new VoiceUnavailableError(`Speech-to-text unavailable: ${reason}`);
+    const files = sttFiles(o.modelsDir, o.model);
+    this.loadedKey = key;
+    this.recognizer = loadSherpa().then((sherpa) =>
+      sherpa.OfflineRecognizer.createAsync({
+        featConfig: { sampleRate: 16000, featureDim: 80 },
+        modelConfig: {
+          whisper: { encoder: files.encoder, decoder: files.decoder, language: o.language, task: 'transcribe' },
+          tokens: files.tokens,
+          numThreads: o.numThreads,
+          provider: 'cpu',
+        },
+      }),
+    );
+    // A failed load must not be cached forever: allow a retry.
+    this.recognizer.catch(() => (this.recognizer = undefined));
     return this.recognizer;
   }
 }
@@ -117,56 +127,66 @@ export interface SherpaTtsOptions {
   numThreads: number;
 }
 
+/** Model files of a Piper voice inside MODELS_DIR. */
+function ttsFiles(modelsDir: string, voice: TtsVoiceId) {
+  const v = TTS_VOICES[voice];
+  const dir = join(resolvePath(modelsDir), v.dir);
+  return { model: join(dir, `${v.file}.onnx`), tokens: join(dir, 'tokens.txt'), dataDir: join(dir, 'espeak-ng-data') };
+}
+
+/** Is this voice downloaded? (used to list choices in the settings) */
+export function isTtsVoiceInstalled(modelsDir: string, voice: TtsVoiceId): boolean {
+  return firstMissing(Object.values(ttsFiles(modelsDir, voice))) === undefined;
+}
+
 export class SherpaTextToSpeech implements TextToSpeech {
   private readonly mutex = new Mutex();
   private tts?: Promise<OfflineTts>;
-  private readonly files: { model: string; tokens: string; dataDir: string };
+  /** Voice the loaded engine was built with (reload when it changes). */
+  private loadedVoice?: TtsVoiceId;
 
-  constructor(private readonly opts: SherpaTtsOptions) {
-    const v = TTS_VOICES[opts.voice];
-    const dir = join(resolve(opts.modelsDir), v.dir);
-    this.files = {
-      model: join(dir, `${v.file}.onnx`),
-      tokens: join(dir, 'tokens.txt'),
-      dataDir: join(dir, 'espeak-ng-data'),
-    };
+  /** @param options fixed, or a function returning the current ones (live settings). */
+  constructor(private readonly options: Live<SherpaTtsOptions>) {}
+
+  private get opts(): SherpaTtsOptions {
+    return resolve(this.options);
   }
 
   status(): VoiceComponentStatus {
-    const missing = firstMissing(Object.values(this.files));
-    return missing
-      ? { available: false, model: this.opts.voice, reason: 'voice not downloaded (run: npm run setup:voice)' }
-      : { available: true, model: this.opts.voice };
+    const { voice, modelsDir } = this.opts;
+    return isTtsVoiceInstalled(modelsDir, voice)
+      ? { available: true, model: voice }
+      : { available: false, model: voice, reason: 'voice not downloaded (run: npm run setup:voice)' };
   }
 
   synthesize(text: string): Promise<AudioClip> {
     return this.mutex.run(async () => {
-      const tts = await this.load();
-      const audio = await tts.generateAsync({
-        text,
-        sid: TTS_VOICES[this.opts.voice].speakerId,
-        speed: this.opts.speed,
-      });
+      const o = this.opts; // read once: voice and speed of THIS request
+      const tts = await this.load(o);
+      const audio = await tts.generateAsync({ text, sid: TTS_VOICES[o.voice].speakerId, speed: o.speed });
       return { samples: audio.samples, sampleRate: audio.sampleRate };
     });
   }
 
-  private load() {
-    if (!this.tts) {
-      const { available, reason } = this.status();
-      if (!available) throw new VoiceUnavailableError(`Text-to-speech unavailable: ${reason}`);
-      this.tts = loadSherpa().then((sherpa) =>
-        sherpa.OfflineTts.createAsync({
-          model: {
-            vits: { model: this.files.model, tokens: this.files.tokens, dataDir: this.files.dataDir },
-            numThreads: this.opts.numThreads,
-            provider: 'cpu',
-          },
-          maxNumSentences: 1,
-        }),
-      );
-      this.tts.catch(() => (this.tts = undefined));
+  private load(o: SherpaTtsOptions) {
+    if (this.tts && o.voice === this.loadedVoice) return this.tts;
+
+    if (!isTtsVoiceInstalled(o.modelsDir, o.voice)) {
+      throw new VoiceUnavailableError('Text-to-speech unavailable: voice not downloaded (run: npm run setup:voice)');
     }
+    const files = ttsFiles(o.modelsDir, o.voice);
+    this.loadedVoice = o.voice;
+    this.tts = loadSherpa().then((sherpa) =>
+      sherpa.OfflineTts.createAsync({
+        model: {
+          vits: { model: files.model, tokens: files.tokens, dataDir: files.dataDir },
+          numThreads: o.numThreads,
+          provider: 'cpu',
+        },
+        maxNumSentences: 1,
+      }),
+    );
+    this.tts.catch(() => (this.tts = undefined));
     return this.tts;
   }
 }

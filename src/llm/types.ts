@@ -36,8 +36,11 @@ export interface LlmProvider {
   streamChat(messages: ChatMessage[], options: GenerationOptions): AsyncIterable<string>;
   /** Cheap reachability check used by the /api/health endpoint. */
   ping(): Promise<{ ok: boolean; models?: string[]; error?: string }>;
-  /** Free the model's VRAM now (optional: only some backends support it). */
-  unload?(): Promise<void>;
+  /**
+   * Free a model's VRAM now (optional: only some backends support it).
+   * @param model defaults to the current model.
+   */
+  unload?(model?: string): Promise<void>;
 }
 
 /** Error raised for non-2xx backend responses, carrying the HTTP status. */

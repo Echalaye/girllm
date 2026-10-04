@@ -4,6 +4,7 @@
  * it is unit-testable and reusable for a future voice or CLI front-end.
  */
 import type { CharacterRepository } from '../characters/characterRepository.js';
+import { resolve, type Live } from '../util/resolve.js';
 import type { Character } from '../characters/schema.js';
 import type { ChatMessage, LlmProvider } from '../llm/types.js';
 import type { ImageService } from '../images/imageService.js';
@@ -54,12 +55,18 @@ export class ChatService {
     private readonly characters: CharacterRepository,
     private readonly sessions: SessionStore,
     private readonly llm: LlmProvider,
-    private readonly opts: ChatServiceOptions,
+    /** Fixed options, or a function returning the current ones (live settings). */
+    private readonly options: Live<ChatServiceOptions>,
     /** Optional: without it the app behaves like step 1 (no long-term memory). */
     private readonly memory?: MemoryService,
     /** Optional: photo generation (step 4). */
     private readonly images?: ImageService,
   ) {}
+
+  /** Current options (re-read on every use). */
+  private get opts(): ChatServiceOptions {
+    return resolve(this.options);
+  }
 
   createSession(characterId: string): { session: Session; character: Character } {
     const character = this.characters.get(characterId);
@@ -81,6 +88,11 @@ export class ChatService {
   listSessions(characterId: string): SessionListItem[] {
     if (!this.characters.get(characterId)) throw new NotFoundError('Character');
     return this.sessions.listByCharacter(characterId);
+  }
+
+  /** Is a reply (or photo) being generated for this chat right now? */
+  isBusy(sessionId: string): boolean {
+    return this.busy.has(sessionId);
   }
 
   deleteSession(sessionId: string): void {

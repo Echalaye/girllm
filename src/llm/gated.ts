@@ -25,8 +25,8 @@ export class GatedLlmProvider implements LlmProvider {
     return this.inner.ping();
   }
 
-  async unload(): Promise<void> {
-    await this.inner.unload?.();
+  async unload(model?: string): Promise<void> {
+    await this.inner.unload?.(model);
   }
 }
 

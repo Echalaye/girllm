@@ -11,6 +11,7 @@
  * streamed, sequentially per character, and their failures are only logged.
  */
 import type { CharacterRepository } from '../characters/characterRepository.js';
+import { resolve, type Live } from '../util/resolve.js';
 import type { Session, SessionStore, StoredMessage } from '../chat/sessionStore.js';
 import type { LlmProvider } from '../llm/types.js';
 import { estimateTokens } from '../prompt/tokenEstimator.js';
@@ -67,8 +68,14 @@ export class MemoryService {
     private readonly llm: LlmProvider,
     private readonly embeddings: EmbeddingProvider | undefined,
     private readonly log: MemoryLogger,
-    private readonly opts: MemoryServiceOptions,
+    /** Fixed options, or a function returning the current ones (live settings). */
+    private readonly options: Live<MemoryServiceOptions>,
   ) {}
+
+  /** Current options (re-read on every use). */
+  private get opts(): MemoryServiceOptions {
+    return resolve(this.options);
+  }
 
   // ---------------------------------------------------------------- read path
 

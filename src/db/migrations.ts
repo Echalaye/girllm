@@ -65,4 +65,13 @@ export const MIGRATIONS: readonly string[] = [
 
   ALTER TABLE messages ADD COLUMN image_id TEXT REFERENCES images (id) ON DELETE SET NULL;
   `,
+
+  // v3 — settings changed from the app (override .env defaults)
+  `
+  CREATE TABLE settings (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL, -- JSON
+    updated_at TEXT NOT NULL
+  );
+  `,
 ];

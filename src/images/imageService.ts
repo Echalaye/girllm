@@ -8,7 +8,8 @@
  */
 import { randomInt, randomUUID } from 'node:crypto';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { join, resolve as resolvePath } from 'node:path';
+import { resolve, type Live } from '../util/resolve.js';
 import type { CharacterRepository } from '../characters/characterRepository.js';
 import type { SessionStore, StoredMessage } from '../chat/sessionStore.js';
 import type { LlmProvider } from '../llm/types.js';
@@ -24,6 +25,10 @@ import {
   MINOR_NEGATIVE_TERMS,
 } from './safety.js';
 import { buildTxt2ImgWorkflow, type HiresParams } from './workflow.js';
+
+/** Framing of the reference portraits generated in the character editor. */
+export const PORTRAIT_SCENE =
+  'head and shoulders portrait, looking at the camera, relaxed slight smile, plain light background, soft diffused light, sharp focus on the face';
 
 /** Marks a user message that is a photo request (shown in the chat as "📷 …"). */
 export const PHOTO_REQUEST_PREFIX = '📷 ';
@@ -70,9 +75,15 @@ export class ImageService {
     private readonly comfy: ComfyClient,
     private readonly gate: GpuGate,
     private readonly log: ImageLogger,
-    private readonly opts: ImageServiceOptions,
+    /** Fixed options, or a function returning the current ones (live settings). */
+    private readonly options: Live<ImageServiceOptions>,
   ) {
-    this.imagesDir = resolve(opts.imagesDir);
+    this.imagesDir = resolvePath(this.opts.imagesDir);
+  }
+
+  /** Current options (re-read on every use). */
+  private get opts(): ImageServiceOptions {
+    return resolve(this.options);
   }
 
   /** Can photos be generated right now? (config + ComfyUI + checkpoint) */
@@ -174,6 +185,60 @@ export class ImageService {
       await rm(path, { force: true });
       throw err;
     }
+  }
+
+  /**
+   * Generate `count` reference-portrait candidates from an appearance
+   * description (character editor). Hires is skipped: these are previews.
+   */
+  async generatePortraits(appearance: string, count: number, signal?: AbortSignal): Promise<Buffer[]> {
+    const { checkpoint, ...s } = this.opts.settings;
+    if (!checkpoint) throw new ImageUnavailableError('IMAGE_CHECKPOINT is not set (settings or .env)');
+    if (!appearance.trim()) throw new ImageUnavailableError('Describe the appearance first');
+    assertSafe(appearance);
+
+    const positive = [ADULT_POSITIVE_TERMS, 'solo', s.style, appearance, PORTRAIT_SCENE].filter(Boolean).join(', ');
+    assertSafe(positive);
+    const negative = [s.negative, MINOR_NEGATIVE_TERMS].filter(Boolean).join(', ');
+
+    return this.gate.runExclusive(async () => {
+      await this.llm.unload?.().catch((err: unknown) => {
+        this.log.warn({ err }, 'could not unload the LLM');
+      });
+      try {
+        const images: Buffer[] = [];
+        for (let i = 0; i < count; i++) {
+          images.push(
+            await this.comfy.generate(
+              buildTxt2ImgWorkflow({
+                checkpoint,
+                positive,
+                negative,
+                seed: randomInt(0, 2 ** 47),
+                width: 1024,
+                height: 1024,
+                steps: s.steps,
+                cfg: s.cfg,
+                sampler: s.sampler,
+                scheduler: s.scheduler,
+              }),
+              signal,
+            ),
+          );
+        }
+        return images;
+      } finally {
+        await this.comfy.free().catch((err: unknown) => {
+          this.log.warn({ err }, 'could not free ComfyUI memory');
+        });
+      }
+    });
+  }
+
+  /** Checkpoints installed in ComfyUI (undefined if ComfyUI is unreachable). */
+  async listCheckpoints(): Promise<string[] | undefined> {
+    const status = await this.comfy.status();
+    return status.ok ? status.checkpoints : undefined;
   }
 
   get(imageId: string): StoredImage | undefined {
