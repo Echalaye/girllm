@@ -140,11 +140,20 @@ const ConfigSchema = z
     IMAGE_HIRES_SCALE: z.coerce.number().min(1).max(2).default(1.25),
     IMAGE_HIRES_DENOISE: z.coerce.number().min(0.1).max(0.7).default(0.35),
     IMAGE_HIRES_STEPS: z.coerce.number().int().min(4).max(60).default(15),
+    // Reference face strength (IP-Adapter, `npm run setup:images`): 0 = off, 0.6–0.8 recommended.
+    IMAGE_FACE_WEIGHT: z.coerce.number().min(0).max(1).default(0.7),
+    // She sends photos on her own: off | rare (≥ 12 of her messages apart) | often (≥ 5 apart).
+    PHOTO_FREQUENCY: z.enum(['off', 'rare', 'often']).default('rare'),
+    // She writes first after this many minutes of silence (0 = never).
+    PROACTIVE_AFTER_MINUTES: z.coerce.number().int().min(0).max(10_080).default(60),
   })
   .refine((c) => c.MAX_REPLY_TOKENS < c.CONTEXT_TOKENS / 2, {
     message: 'MAX_REPLY_TOKENS must be less than half of CONTEXT_TOKENS',
     path: ['MAX_REPLY_TOKENS'],
   });
+
+export const PHOTO_FREQUENCIES = ['off', 'rare', 'often'] as const;
+export type PhotoFrequency = (typeof PHOTO_FREQUENCIES)[number];
 
 export type AppConfig = Readonly<{
   host: string;
@@ -170,6 +179,8 @@ export type AppConfig = Readonly<{
   replyLanguage: string | undefined;
   /** SQLite database file path. */
   databasePath: string;
+  /** DATA_DIR/faces: the characters' reference faces. */
+  facesDir: string;
   memory: Readonly<{
     enabled: boolean;
     embeddingModel: string | undefined;
@@ -194,7 +205,11 @@ export type AppConfig = Readonly<{
     style: string;
     negative: string;
     hires: Readonly<{ scale: number; denoise: number; steps: number }>;
+    faceWeight: number;
+    photoFrequency: PhotoFrequency;
   }>;
+  /** Minutes of silence before she writes first (0 = never). */
+  proactiveAfterMinutes: number;
   voice: Readonly<{
     enabled: boolean;
     modelsDir: string;
@@ -242,6 +257,7 @@ export function parseConfig(env: NodeJS.ProcessEnv): AppConfig {
     userName: c.USER_NAME,
     replyLanguage: c.REPLY_LANGUAGE,
     databasePath: join(c.DATA_DIR, 'girllm.db'),
+    facesDir: join(c.DATA_DIR, 'faces'),
     memory: Object.freeze({
       enabled: c.MEMORY_ENABLED,
       embeddingModel: c.EMBEDDING_MODEL,
@@ -264,7 +280,10 @@ export function parseConfig(env: NodeJS.ProcessEnv): AppConfig {
       style: c.IMAGE_STYLE.trim(),
       negative: c.IMAGE_NEGATIVE_PROMPT.trim(),
       hires: Object.freeze({ scale: c.IMAGE_HIRES_SCALE, denoise: c.IMAGE_HIRES_DENOISE, steps: c.IMAGE_HIRES_STEPS }),
+      faceWeight: c.IMAGE_FACE_WEIGHT,
+      photoFrequency: c.PHOTO_FREQUENCY,
     }),
+    proactiveAfterMinutes: c.PROACTIVE_AFTER_MINUTES,
     voice: Object.freeze({
       enabled: c.VOICE_ENABLED,
       modelsDir: c.MODELS_DIR,

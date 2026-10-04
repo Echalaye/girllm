@@ -8,7 +8,7 @@
  */
 import { readFile, stat } from 'node:fs/promises';
 import { basename, extname } from 'node:path';
-import { CardV1Schema, CardV2Schema, readAppearance, readStyle, type CardFields, type Character } from './schema.js';
+import { CardV1Schema, CardV2Schema, characterFromCard, type CardFields, type Character } from './schema.js';
 
 /** Cards above this size are rejected before being read into memory. */
 export const MAX_CARD_FILE_BYTES = 20 * 1024 * 1024;
@@ -113,8 +113,7 @@ export async function loadCardFile(filePath: string): Promise<Character> {
     const buffer = await readFile(filePath);
     const json = ext === '.png' ? extractCardJsonFromPng(buffer) : buffer.toString('utf8');
     const fields = parseCardObject(JSON.parse(json));
-    return { ...fields, appearance: readAppearance(fields.extensions),
-      style: readStyle(fields.extensions), id: slugify(filePath), sourceFile: filePath };
+    return characterFromCard(fields, slugify(filePath), filePath);
   } catch (err) {
     throw new CardLoadError(filePath, (err as Error).message);
   }

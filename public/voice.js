@@ -87,6 +87,8 @@ export class Speaker {
   #generation = 0; // bumped by stop(): stale items are discarded
   #audio = new Audio();
   #endCurrent = null;
+  /** Resolvers waiting for the queue to drain (see whenIdle). */
+  #idleWaiters = [];
 
   /** @param {(text: string) => Promise<Blob | null>} synthesize */
   constructor(synthesize) {
@@ -97,6 +99,17 @@ export class Speaker {
     const item = { generation: this.#generation, audio: this.synthesize(text).catch(() => null) };
     this.#queue.push(item);
     void this.#pump();
+  }
+
+  /** True while something is playing or waiting to be played. */
+  get busy() {
+    return this.#playing || this.#queue.length > 0;
+  }
+
+  /** Resolves once everything queued has been played (or stopped). */
+  whenIdle() {
+    if (!this.busy) return Promise.resolve();
+    return new Promise((resolve) => this.#idleWaiters.push(resolve));
   }
 
   /** Silence immediately and drop everything queued. */
@@ -119,6 +132,7 @@ export class Speaker {
       }
     } finally {
       this.#playing = false;
+      if (!this.#queue.length) this.#idleWaiters.splice(0).forEach((resolve) => resolve());
     }
   }
 

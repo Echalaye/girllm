@@ -5,6 +5,14 @@
  */
 import type { ChatRole } from '../llm/types.js';
 
+export type MessageKind = 'opening' | 'nudge';
+
+/** Optional attributes of a new message. */
+export interface NewMessageOptions {
+  imageId?: string | undefined;
+  kind?: MessageKind | undefined;
+}
+
 export interface StoredMessage {
   /** Monotonic sequence number — used as a cursor by the memory system. */
   seq: number;
@@ -13,6 +21,8 @@ export interface StoredMessage {
   content: string;
   /** Attached generated image (a "photo" she sent), if any. */
   imageId: string | null;
+  /** Messages she wrote on her own: 'opening' (first message) or 'nudge' (after a silence). */
+  kind: MessageKind | null;
   createdAt: string; // ISO-8601
 }
 
@@ -50,9 +60,18 @@ export interface SessionStore {
   create(characterId: string, greeting?: string): Session;
   get(id: string): Session | undefined;
   listByCharacter(characterId: string, limit?: number): SessionListItem[];
+  /** Every session id of a character (no limit), e.g. to delete them all. */
+  listIdsByCharacter(characterId: string): string[];
   /** @returns false if the session did not exist. */
   delete(id: string): boolean;
-  appendMessage(sessionId: string, role: StoredMessage['role'], content: string, imageId?: string): StoredMessage;
+  appendMessage(
+    sessionId: string,
+    role: StoredMessage['role'],
+    content: string,
+    options?: NewMessageOptions,
+  ): StoredMessage;
+  /** Attach a generated image to an existing message (a photo she sent with her text). */
+  setMessageImage(messageId: string, imageId: string): void;
   /** Remove and return the last message if it has the given role. */
   popLastIf(sessionId: string, role: StoredMessage['role']): StoredMessage | undefined;
   updateMemoryState(sessionId: string, patch: Partial<SessionMemoryState>): void;

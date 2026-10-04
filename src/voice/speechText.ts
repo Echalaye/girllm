@@ -16,3 +16,31 @@ export function cleanForSpeech(text: string): string {
     .replace(/\s+/g, ' ')
     .trim();
 }
+
+/**
+ * Whisper was trained on subtitled videos: on silence or background noise
+ * it tends to "hear" subtitle credits and outros. In hands-free mode the
+ * microphone picks up plenty of noise, so these phantom sentences must
+ * never be sent to her as if the user had said them.
+ */
+const WHISPER_HALLUCINATIONS: readonly RegExp[] = [
+  /sous-titr(?:es|age|é)/i, // "Sous-titres réalisés par la communauté d'Amara.org"
+  /amara\.org/i,
+  /merci d'avoir regardé/i,
+  /abonnez-vous/i,
+  /thanks? (?:you )?for watching/i,
+  /please subscribe/i,
+  /subtitles by/i,
+];
+
+/**
+ * Normalize a transcript and drop known hallucinations.
+ * @returns the cleaned text, or '' when nothing real was said.
+ */
+export function cleanTranscript(text: string): string {
+  const trimmed = text.replace(/\s+/g, ' ').trim();
+  // Only punctuation / music notes ("...", "♪") = nothing was said.
+  if (!/[\p{L}\p{N}]/u.test(trimmed)) return '';
+  if (WHISPER_HALLUCINATIONS.some((re) => re.test(trimmed))) return '';
+  return trimmed;
+}

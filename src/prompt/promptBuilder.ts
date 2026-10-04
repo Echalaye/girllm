@@ -5,7 +5,7 @@
  * Layout — exactly ONE system message, and the conversation always ENDS
  * WITH THE USER'S MESSAGE:
  *   [system]  instructions (writing style) + quoted FICTIONAL examples + character
- *             + story so far + memories + "right now" (time, mood)
+ *             + world info (lorebook) + story so far + memories + "right now" (time, mood)
  *             + reminders (variety, language, card's post-history notes)
  *             + an explicit "end of notes" boundary
  *   [user/assistant …, user]  recent (unsummarized) history within budget
@@ -82,6 +82,16 @@ export interface PromptOptions {
   replyLanguage?: string | undefined;
   memory?: PromptMemory | undefined;
   time?: PromptTime | undefined;
+  /** Lorebook entries triggered by the conversation (already selected and budgeted). */
+  lore?: readonly string[] | undefined;
+  /** Extra one-off reminders for this reply (photo possibility, "she writes first"…). */
+  reminders?: readonly string[] | undefined;
+}
+
+/** "[World info]" block: lorebook entries relevant to the current conversation. */
+export function buildLoreBlock(lore: readonly string[] | undefined, charName: string, userName: string): string {
+  if (!lore?.length) return '';
+  return `[World info]\n${lore.map((e) => applyMacros(e.trim(), charName, userName)).join('\n\n')}`;
 }
 
 /**
@@ -130,6 +140,7 @@ export function buildReminderBlock(
   character: Character,
   userName: string,
   language: string | undefined,
+  extra: readonly string[] = [],
 ): string {
   const lines: string[] = [];
   const openings = recentOpenings(history);
@@ -143,6 +154,7 @@ export function buildReminderBlock(
   }
   const post = applyMacros(character.post_history_instructions.trim(), character.name, userName);
   if (post) lines.push(post);
+  for (const line of extra) lines.push(applyMacros(line, character.name, userName));
   return lines.length ? `[Reminders]\n${lines.join('\n')}` : '';
 }
 
@@ -241,9 +253,10 @@ export function buildPrompt(
   const language = options.replyLanguage;
   const systemText = [
     buildSystemPrompt(character, userName),
+    buildLoreBlock(options.lore, character.name, userName),
     buildMemoryBlock(options.memory, character.name, userName),
     buildNowBlock(options.time, options.memory?.mood, language, character.name, userName),
-    buildReminderBlock(history, character, userName, language),
+    buildReminderBlock(history, character, userName, language, options.reminders),
     endOfNotes(character.name, userName),
   ]
     .filter(Boolean)

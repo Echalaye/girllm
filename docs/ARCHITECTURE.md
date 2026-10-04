@@ -29,48 +29,60 @@ public/speech.js (sentence splitter)   ──► /api/tts ──► voice/sherpa
 
 ## Modules
 
-| Path                              | Responsibility                                                                                                    |
-| --------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `src/config.ts`                   | Load `.env` and validate it (zod). Fails fast                                                                     |
-| `src/db/database.ts`              | Open SQLite (WAL, foreign keys), run migrations, transaction helper                                               |
-| `src/db/migrations.ts`            | Ordered schema migrations, versioned with `PRAGMA user_version`                                                   |
-| `src/llm/types.ts`                | `LlmProvider` interface and message types                                                                         |
-| `src/llm/sse.ts`                  | Parses the SSE stream coming **from** the backend                                                                 |
-| `src/llm/ollamaProvider.ts`       | Native Ollama client (`/api/chat`, `/api/tags`, unload). Sends `num_ctx`, `min_p`, `repeat_penalty`, `keep_alive` |
-| `src/llm/ndjson.ts`               | Parses Ollama's newline-delimited JSON stream                                                                     |
-| `src/llm/openaiCompatProvider.ts` | Streaming client for `/v1/chat/completions` (llama.cpp, KoboldCpp, LM Studio)                                     |
-| `src/llm/createProvider.ts`       | Picks the LLM and embedding providers from `LLM_PROVIDER`                                                         |
-| `src/llm/complete.ts`             | Non-streaming helper (used by the background memory tasks)                                                        |
-| `src/characters/*`                | Character Card V1/V2/V3 schemas, `.json`/`.png` loader, in-memory registry                                        |
-| `src/prompt/tokenEstimator.ts`    | Cheap, conservative token estimate (~3.5 chars/token)                                                             |
-| `src/prompt/promptBuilder.ts`     | Card + memory + history → messages, within the token budget                                                       |
-| `src/chat/sessionStore.ts`        | `SessionStore` interface and session/message types                                                                |
-| `src/chat/sqliteSessionStore.ts`  | SQLite implementation (prepared statements)                                                                       |
-| `src/chat/chatService.ts`         | Send, regenerate, abort, list and delete chats. One generation per chat at a time                                 |
-| `src/memory/embeddings.ts`        | `EmbeddingProvider`, `/v1/embeddings` client, vector maths and BLOB encoding                                      |
-| `src/memory/memoryStore.ts`       | Long-term memories per character, brute-force cosine search                                                       |
-| `src/memory/summarizer.ts`        | Which messages to summarize (pure function) and the summary prompt                                                |
-| `src/memory/factExtractor.ts`     | Fact + mood extraction prompt and tolerant JSON parsing                                                           |
-| `src/memory/memoryService.ts`     | Orchestration: build the memory context, schedule background tasks, de-duplication                                |
-| `src/util/serialQueue.ts`         | Runs async tasks one at a time per key (per character)                                                            |
-| `src/util/gpuGate.ts`             | Shared/exclusive GPU access: LLM calls are shared, image generation is exclusive and waits for running calls      |
-| `src/llm/gated.ts`                | `GatedLlmProvider` / `GatedEmbeddingProvider`: route every LLM and embedding call through the gate                |
-| `src/images/safety.ts`            | Code-enforced "no minors" rule: term and age detection (EN/FR, Unicode-aware), forced `adult` tags and negatives  |
-| `src/images/photoPrompt.ts`       | Asks the LLM for `{caption, scene}`, with tolerant JSON parsing and a fallback                                    |
-| `src/images/workflow.ts`          | Standard SDXL txt2img graph in ComfyUI API format                                                                 |
-| `src/images/comfyClient.ts`       | `/prompt`, `/history` polling, `/view` (PNG check), `/free`, cancel on abort, `/object_info` status               |
-| `src/images/imageStore.ts`        | Image metadata (file, scene, prompt, seed)                                                                        |
-| `src/images/imageService.ts`      | Orchestration: safety → photo idea → exclusive GPU phase → store file and messages                                |
-| `src/util/mutex.ts`               | One-at-a-time execution that returns each task's result or error to its own caller (voice engines)                |
-| `src/voice/catalog.ts`            | Downloadable STT models and TTS voices: URL, pinned SHA-256, file layout                                          |
-| `src/voice/sherpaVoice.ts`        | Whisper and Piper engines, loaded lazily on first use, one request at a time                                      |
-| `src/voice/speechText.ts`         | Strips `*actions*`, emojis, markdown and URLs before synthesis                                                    |
-| `src/voice/wav.ts`                | 16-bit WAV encoding and float32 PCM decoding                                                                      |
-| `scripts/setupVoice.ts`           | `npm run setup:voice`: download, verify the checksum, then extract atomically                                     |
-| `public/speech.js`                | `SentenceSplitter`: streamed text → speakable sentences (never cuts inside `*actions*` or before a closing `»`)   |
-| `public/voice.js`                 | `Recorder` (mic → 16 kHz mono float32) and `Speaker` (ordered playback queue, can be interrupted)                 |
-| `src/http/*`                      | Routes, error mapping, security hooks, SSE to the browser                                                         |
-| `src/index.ts`                    | Composition root: wires everything, graceful shutdown                                                             |
+| Path                                                  | Responsibility                                                                                                             |
+| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `src/config.ts`                                       | Load `.env` and validate it (zod). Fails fast                                                                              |
+| `src/db/database.ts`                                  | Open SQLite (WAL, foreign keys), run migrations, transaction helper                                                        |
+| `src/db/migrations.ts`                                | Ordered schema migrations, versioned with `PRAGMA user_version`                                                            |
+| `src/llm/types.ts`                                    | `LlmProvider` interface and message types                                                                                  |
+| `src/llm/sse.ts`                                      | Parses the SSE stream coming **from** the backend                                                                          |
+| `src/llm/ollamaProvider.ts`                           | Native Ollama client (`/api/chat`, `/api/tags`, unload). Sends `num_ctx`, `min_p`, `repeat_penalty`, `keep_alive`          |
+| `src/llm/ndjson.ts`                                   | Parses Ollama's newline-delimited JSON stream                                                                              |
+| `src/llm/openaiCompatProvider.ts`                     | Streaming client for `/v1/chat/completions` (llama.cpp, KoboldCpp, LM Studio)                                              |
+| `src/llm/createProvider.ts`                           | Picks the LLM and embedding providers from `LLM_PROVIDER`                                                                  |
+| `src/llm/complete.ts`                                 | Non-streaming helper (used by the background memory tasks)                                                                 |
+| `src/characters/*`                                    | Character Card V1/V2/V3 schemas, `.json`/`.png` loader, in-memory registry                                                 |
+| `src/characters/characterRepository.ts`               | Registry + writes: create/update (atomic V2 JSON, round-trip validated, stable id), import, export, remove; refuses minors |
+| `src/characters/characterService.ts`                  | Deleting a character cascades to her chats, photos, memories and face (refused while a chat is generating)                 |
+| `src/characters/faceStore.ts`                         | Reference faces (`data/faces/<id>.png\|jpg`) and temporary portrait candidates; paths built from validated ids only        |
+| `src/images/imageSanitizer.ts`                        | Uploaded faces: PNG/JPEG detection from the bytes, size limits, metadata stripped (EXIF, text, comments)                   |
+| `src/settings/settingsSchema.ts`                      | Settings changeable from the app (zod), `.env` defaults                                                                    |
+| `src/settings/settingsService.ts`                     | DB-backed overrides of the `.env` defaults, change listeners; services read them through getters (`Live<T>`)               |
+| `src/util/resolve.ts`                                 | `Live<T>` = a value or a function returning the current one (live settings without restarts)                               |
+| `src/util/atomicWrite.ts`                             | Write to a temporary file, then rename: never a half-written card or face                                                  |
+| `src/prompt/tokenEstimator.ts`                        | Cheap, conservative token estimate (~3.5 chars/token)                                                                      |
+| `src/prompt/promptBuilder.ts`                         | Card + memory + history → messages, within the token budget                                                                |
+| `src/chat/sessionStore.ts`                            | `SessionStore` interface and session/message types                                                                         |
+| `src/chat/sqliteSessionStore.ts`                      | SQLite implementation (prepared statements)                                                                                |
+| `src/chat/chatService.ts`                             | Send, regenerate, abort, list and delete chats. One generation per chat at a time                                          |
+| `src/memory/embeddings.ts`                            | `EmbeddingProvider`, `/v1/embeddings` client, vector maths and BLOB encoding                                               |
+| `src/memory/memoryStore.ts`                           | Long-term memories per character, brute-force cosine search                                                                |
+| `src/memory/summarizer.ts`                            | Which messages to summarize (pure function) and the summary prompt                                                         |
+| `src/memory/factExtractor.ts`                         | Fact + mood extraction prompt and tolerant JSON parsing                                                                    |
+| `src/memory/memoryService.ts`                         | Orchestration: build the memory context, schedule background tasks, de-duplication                                         |
+| `src/util/serialQueue.ts`                             | Runs async tasks one at a time per key (per character)                                                                     |
+| `src/util/gpuGate.ts`                                 | Shared/exclusive GPU access: LLM calls are shared, image generation is exclusive and waits for running calls               |
+| `src/llm/gated.ts`                                    | `GatedLlmProvider` / `GatedEmbeddingProvider`: route every LLM and embedding call through the gate                         |
+| `src/images/safety.ts`                                | Code-enforced "no minors" rule: term and age detection (EN/FR, Unicode-aware), forced `adult` tags and negatives           |
+| `src/images/photoPrompt.ts`                           | Asks the LLM for `{caption, scene}`, with tolerant JSON parsing and a fallback                                             |
+| `src/images/workflow.ts`                              | Standard SDXL txt2img graph in ComfyUI API format                                                                          |
+| `src/images/comfyClient.ts`                           | `/prompt`, `/history` polling, `/view` (PNG check), `/free`, cancel on abort, `/object_info` status                        |
+| `src/images/imageStore.ts`                            | Image metadata (file, scene, prompt, seed)                                                                                 |
+| `src/images/imageService.ts`                          | Orchestration: safety → photo idea → exclusive GPU phase → store file and messages                                         |
+| `src/util/mutex.ts`                                   | One-at-a-time execution that returns each task's result or error to its own caller (voice engines)                         |
+| `src/voice/catalog.ts`                                | Downloadable STT models and TTS voices: URL, pinned SHA-256, file layout                                                   |
+| `src/voice/sherpaVoice.ts`                            | Whisper and Piper engines, loaded lazily on first use, one request at a time                                               |
+| `src/voice/speechText.ts`                             | Strips `*actions*`, emojis, markdown and URLs before synthesis                                                             |
+| `src/voice/wav.ts`                                    | 16-bit WAV encoding and float32 PCM decoding                                                                               |
+| `scripts/setupVoice.ts`                               | `npm run setup:voice`: download, verify the checksum, then extract atomically                                              |
+| `public/speech.js`                                    | `SentenceSplitter`: streamed text → speakable sentences (never cuts inside `*actions*` or before a closing `»`)            |
+| `public/voice.js`                                     | `Recorder` (mic → 16 kHz mono float32) and `Speaker` (ordered playback queue, can be interrupted, `whenIdle()`)            |
+| `public/vad.js`                                       | `Downsampler` (→ 16 kHz) and `VoiceActivityDetector` (adaptive noise floor, hysteresis, pre-roll); pure, unit-tested       |
+| `public/pcm-capture.worklet.js`                       | AudioWorklet forwarding raw microphone samples in batches                                                                  |
+| `public/call.js`                                      | `CallSession`: mic → worklet → VAD → utterances; paused while she thinks and speaks                                        |
+| `public/app.js`, `api.js`, `settings.js`, `editor.js` | UI: chat and sidebar, fetch/SSE helpers, settings drawer, character editor                                                 |
+| `src/http/*`                                          | Routes, error mapping, security hooks, SSE to the browser                                                                  |
+| `src/index.ts`                                        | Composition root: wires everything, graceful shutdown                                                                      |
 
 Dependencies only point "inwards": `http` → `chat` → `memory` / `prompt` / `characters` / `llm` → `db`.
 Nothing below `http` knows about HTTP, so a voice or CLI front-end can reuse it as is.
@@ -111,7 +123,7 @@ logged, never shown to the user.
 If the embedding backend is down, memories are stored without a vector and retrieval falls back to recency. The
 chat keeps working, with a warning logged at most once a minute.
 
-## Database schema (v1)
+## Database schema (v4)
 
 | Table                    | Key columns                                                                                                                                                                                     |
 | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -119,6 +131,8 @@ chat keeps working, with a warning logged at most once a minute.
 | `messages`               | `seq` (autoincrement, used as a cursor), `id` (UUID, public), `session_id` → cascade delete, `role`, `content`                                                                                  |
 | `images` (v2)            | `id`, `session_id` → cascade delete, `file_name`, `scene` (fed back to the LLM), `prompt`, `seed`                                                                                               |
 | `messages.image_id` (v2) | Links a photo message to its image (set NULL if the image row is gone)                                                                                                                          |
+| `messages.kind` (v4)     | `NULL` = a reply; `opening` / `nudge` = a message she wrote first (prevents two nudges in a row; "rewrite" keeps the kind)                                                                      |
+| `settings` (v3)          | `key`, `value` (JSON), `updated_at`: only the values changed from the app; absent = `.env` default                                                                                              |
 | `memories`               | `id`, `character_id`, `category` (`user`/`character`/`relationship`/`event`), `content`, `embedding` (float32 BLOB, L2-normalised), `embedding_model`, `source_session_id` → set NULL on delete |
 
 Vectors are only compared with vectors from the same `embedding_model`, so changing the model never mixes
@@ -126,37 +140,56 @@ incompatible spaces. Old memories then rank by recency until they are re-learned
 
 ## SSE protocol (server → browser)
 
-| Event   | Data                                                                                                              |
-| ------- | ----------------------------------------------------------------------------------------------------------------- |
-| `token` | `{ "text": string }`                                                                                              |
-| `done`  | `{ "messageId": string \| null, "aborted": boolean, "estimatedPromptTokens": number, "droppedMessages": number }` |
-| `error` | `{ "message": string }`                                                                                           |
+| Event         | Data                                                                                                              |
+| ------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `token`       | `{ "text": string }`                                                                                              |
+| `done`        | `{ "messageId": string \| null, "aborted": boolean, "estimatedPromptTokens": number, "droppedMessages": number }` |
+| `error`       | `{ "message": string }`                                                                                           |
+| `photo_start` | `{}` — she is sending a photo with the message just completed (after `done`)                                      |
+| `photo`       | `{ "messageId": string, "imageId": string }` — the photo is attached to that message                              |
+| `photo_error` | `{ "message": string }` — the text stays, only the photo failed or was refused                                    |
 
 ## HTTP API
 
-| Method | Path                           | Body                                                               | Response                                                                    |
-| ------ | ------------------------------ | ------------------------------------------------------------------ | --------------------------------------------------------------------------- |
-| GET    | `/api/health`                  | —                                                                  | `{ status, llm: { ok, models?, error? } }`                                  |
-| GET    | `/api/config`                  | —                                                                  | `{ userName, memoryEnabled }`                                               |
-| GET    | `/api/characters`              | —                                                                  | `[{ id, name, creatorNotes, tags }]`                                        |
-| GET    | `/api/characters/:id/sessions` | —                                                                  | `[{ id, title, createdAt, updatedAt, messageCount }]` (newest first)        |
-| POST   | `/api/sessions`                | `{ characterId }`                                                  | `201 { session, character }`                                                |
-| GET    | `/api/sessions/:id`            | —                                                                  | `{ session (with summary, mood), character }`                               |
-| DELETE | `/api/sessions/:id`            | —                                                                  | `204` (memories are kept)                                                   |
-| POST   | `/api/sessions/:id/messages`   | `{ text }` (1–8000 chars)                                          | SSE stream                                                                  |
-| POST   | `/api/sessions/:id/regenerate` | —                                                                  | SSE stream                                                                  |
-| GET    | `/api/characters/:id/memories` | —                                                                  | `[{ id, category, content, createdAt, updatedAt }]`                         |
-| POST   | `/api/characters/:id/memories` | `{ category, content }` (3–300 chars)                              | `201`, or `409` if it duplicates an existing memory                         |
-| DELETE | `/api/memories/:id`            | —                                                                  | `204`                                                                       |
-| GET    | `/api/images/status`           | —                                                                  | `{ available, checkpoint?, reason? }`                                       |
-| POST   | `/api/sessions/:id/photo`      | `{ request? }` (≤ 300 chars)                                       | `{ message }` with `imageId` (20–60 s; cancelled if the client disconnects) |
-| GET    | `/api/images/:id`              | —                                                                  | `image/png`                                                                 |
-| GET    | `/api/voice`                   | —                                                                  | `{ stt: { available, model, reason? }, tts: {…} }`                          |
-| POST   | `/api/stt`                     | `application/octet-stream`: float32 LE mono 16 kHz, ≤ 4 MB (~60 s) | `{ text }` (empty if under 0.3 s)                                           |
-| POST   | `/api/tts`                     | `{ text }` (1–1000 chars)                                          | `audio/wav`, or `204` if nothing is speakable                               |
+| Method | Path                                       | Body                                                                            | Response                                                                     |
+| ------ | ------------------------------------------ | ------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| GET    | `/api/health`                              | —                                                                               | `{ status, llm: { ok, models?, error? } }`                                   |
+| GET    | `/api/config`                              | —                                                                               | `{ userName, memoryEnabled }`                                                |
+| GET    | `/api/characters`                          | —                                                                               | `[{ id, name, creatorNotes, tags, style, hasFace }]`                         |
+| GET    | `/api/characters/:id/sessions`             | —                                                                               | `[{ id, title, createdAt, updatedAt, messageCount }]` (newest first)         |
+| POST   | `/api/sessions`                            | `{ characterId }`                                                               | `201 { session, character }`                                                 |
+| GET    | `/api/sessions/:id`                        | —                                                                               | `{ session (with summary, mood), character }`                                |
+| DELETE | `/api/sessions/:id`                        | —                                                                               | `204` (memories are kept)                                                    |
+| POST   | `/api/sessions/:id/messages`               | `{ text }` (1–8000 chars)                                                       | SSE stream                                                                   |
+| POST   | `/api/sessions/:id/regenerate`             | —                                                                               | SSE stream                                                                   |
+| GET    | `/api/characters/:id/memories`             | —                                                                               | `[{ id, category, content, createdAt, updatedAt }]`                          |
+| POST   | `/api/characters/:id/memories`             | `{ category, content }` (3–300 chars)                                           | `201`, or `409` if it duplicates an existing memory                          |
+| DELETE | `/api/memories/:id`                        | —                                                                               | `204`                                                                        |
+| GET    | `/api/images/status`                       | —                                                                               | `{ available, checkpoint?, reason? }`                                        |
+| POST   | `/api/sessions/:id/photo`                  | `{ request? }` (≤ 300 chars)                                                    | `{ message }` with `imageId` (20–60 s; cancelled if the client disconnects)  |
+| GET    | `/api/images/:id`                          | —                                                                               | `image/png`                                                                  |
+| GET    | `/api/voice`                               | —                                                                               | `{ stt: { available, model, reason? }, tts: {…} }`                           |
+| POST   | `/api/stt`                                 | `application/octet-stream`: float32 LE mono 16 kHz, ≤ 4 MB (~60 s)              | `{ text }` (empty if under 0.3 s)                                            |
+| POST   | `/api/tts`                                 | `{ text }` (1–1000 chars)                                                       | `audio/wav`, or `204` if nothing is speakable                                |
+| GET    | `/api/settings`                            | —                                                                               | `{ values, defaults, overridden, options: { models, checkpoints, voices } }` |
+| PUT    | `/api/settings`                            | partial settings (unknown keys refused)                                         | `{ values, defaults, overridden }`                                           |
+| POST   | `/api/settings/reset`                      | `{ keys? }`                                                                     | same; back to `.env` (all, or the listed keys)                               |
+| POST   | `/api/characters`                          | card fields (`name` required, `style`, `appearance`…)                           | `201` summary; `422` if she isn't an adult                                   |
+| GET    | `/api/characters/:id`                      | —                                                                               | summary + `card` (editable fields)                                           |
+| PUT    | `/api/characters/:id`                      | card fields                                                                     | summary (the id never changes)                                               |
+| DELETE | `/api/characters/:id`                      | —                                                                               | `{ deleted, chats, memories }` (cascade); `409` while generating             |
+| POST   | `/api/characters/import`                   | `application/octet-stream`: `.json` or `.png` card, ≤ 20 MB                     | `201` summary                                                                |
+| GET    | `/api/characters/:id/export`               | —                                                                               | Character Card V2 JSON (download)                                            |
+| GET    | `/api/characters/:id/face`                 | —                                                                               | `image/png` or `image/jpeg`                                                  |
+| PUT    | `/api/characters/:id/face`                 | octet-stream PNG/JPEG ≤ 10 MB + header `x-girllm-consent: adult-and-consenting` | `204`; `428` without the consent header                                      |
+| DELETE | `/api/characters/:id/face`                 | —                                                                               | `204`                                                                        |
+| POST   | `/api/characters/:id/face/candidates`      | — (uses the saved appearance)                                                   | `{ candidates: [uuid ×4] }` (cancelled if the client disconnects)            |
+| GET    | `/api/characters/:id/face/candidates/:cid` | —                                                                               | `image/png` (kept 1 h)                                                       |
+| POST   | `/api/characters/:id/face/candidates/:cid` | —                                                                               | `204`: the candidate becomes her face                                        |
 
 Error statuses: `400` invalid input · `403` cross-origin · `404` not found · `409` already generating or duplicate ·
-`413` prompt or upload too large · `415` wrong content type · `421` wrong Host · `422` photo refused (safety) ·
+`413` prompt or upload too large · `415` wrong content type · `421` wrong Host · `422` photo or character refused
+(safety) · `428` face upload without consent ·
 `502` LLM backend or ComfyUI error · `503` voice/photos not installed or disabled.
 
 ## Tooling
@@ -232,3 +265,24 @@ this rule in every configuration.
 - **A message cursor (`seq`) instead of flags on each message**: "what's new since X" is one indexed range query.
 - **Fastify, no LLM SDK, estimated tokens, separate connect and generation timeouts**: unchanged from step 1.
   The OpenAI streaming protocol is around 60 lines with `fetch`, and token estimates are deliberately pessimistic.
+
+## Step 4d flows
+
+**She writes first.** `POST /initiate` → `ChatService.canInitiate` (opening: empty chat; nudge: silence ≥
+`proactiveAfterMinutes`, last message not already a nudge) → the prompt gets a _stage direction_ as the final user
+turn ("Etienne hasn't written for 3 hours…"), which is never stored → her message is saved with `kind`. The page
+asks on chat open and once a minute; the server is the only judge.
+
+**Photos she sends.** When allowed (frequency cooldown, or the user's message asks for a photo), a reminder tells
+the model it may end with `[photo: …]`. `PhotoTagFilter` hides the tag from the token stream (holding back only a
+possible tag prefix) → the text is stored, `done` is sent → `ImageService.attachPhoto` (safety, idea, GPU phase) →
+`setMessageImage` → `photo` event. A tag emitted when not allowed is hidden and ignored.
+
+**Reference face.** `ImageService.faceReference`: weight > 0 + a face in `FaceStore` + `ComfyClient.faceSupport()`
+(nodes present with the expected inputs, both model files listed; cached 1 min) → upload to ComfyUI's input folder
+under a content-hash name (once per process) → workflow nodes 12–15 (`LoadImage`, `IPAdapterModelLoader`,
+`CLIPVisionLoader`, `IPAdapterAdvanced`); both samplers use the patched model. Any failure → photo without the face,
+logged.
+
+**Lorebook.** `selectLore(character_book, recent messages, 15% of context)` → `[World info]` block placed right after
+the character definition.

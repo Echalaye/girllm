@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { Mutex } from '../src/util/mutex.js';
 import { STT_MODELS, TTS_VOICES } from '../src/voice/catalog.js';
 import { SherpaSpeechToText, SherpaTextToSpeech } from '../src/voice/sherpaVoice.js';
-import { cleanForSpeech } from '../src/voice/speechText.js';
+import { cleanForSpeech, cleanTranscript } from '../src/voice/speechText.js';
 import { VoiceUnavailableError } from '../src/voice/types.js';
 import { decodeFloat32, encodeWav16 } from '../src/voice/wav.js';
 
@@ -80,5 +80,24 @@ describe('sherpa engines without models', () => {
       VoiceUnavailableError,
     );
     await expect(tts.synthesize('Bonjour')).rejects.toBeInstanceOf(VoiceUnavailableError);
+  });
+});
+
+describe('cleanTranscript', () => {
+  it('keeps real speech, normalized', () => {
+    expect(cleanTranscript('  Salut,   ça va ?  ')).toBe('Salut, ça va ?');
+  });
+
+  it('drops Whisper hallucinations on silence or noise', () => {
+    for (const phantom of [
+      "Sous-titres réalisés par la communauté d'Amara.org",
+      "Merci d'avoir regardé cette vidéo !",
+      'Thank you for watching.',
+      '...',
+      '♪ ♪',
+      '',
+    ]) {
+      expect(cleanTranscript(phantom)).toBe('');
+    }
   });
 });

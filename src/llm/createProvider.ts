@@ -4,17 +4,21 @@ import { OllamaEmbeddings, OpenAiCompatEmbeddings, type EmbeddingProvider } from
 import { OllamaProvider } from './ollamaProvider.js';
 import { OpenAiCompatProvider } from './openaiCompatProvider.js';
 import type { LlmProvider } from './types.js';
+import type { Live } from '../util/resolve.js';
 
-export function createLlmProvider(config: AppConfig): LlmProvider {
+/**
+ * @param model optional live model name (settings); defaults to LLM_MODEL.
+ */
+export function createLlmProvider(config: AppConfig, model: Live<string> = config.llm.model): LlmProvider {
   const { llm, generation } = config;
   return llm.provider === 'ollama'
     ? new OllamaProvider({
         baseUrl: llm.baseUrl,
-        model: llm.model,
+        model,
         numCtx: generation.contextTokens,
         keepAlive: llm.keepAlive,
       })
-    : new OpenAiCompatProvider({ baseUrl: llm.baseUrl, model: llm.model, apiKey: llm.apiKey });
+    : new OpenAiCompatProvider({ baseUrl: llm.baseUrl, model, apiKey: llm.apiKey });
 }
 
 /** Undefined when no embedding model is configured. */

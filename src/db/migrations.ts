@@ -65,4 +65,20 @@ export const MIGRATIONS: readonly string[] = [
 
   ALTER TABLE messages ADD COLUMN image_id TEXT REFERENCES images (id) ON DELETE SET NULL;
   `,
+
+  // v3 — settings changed from the app (override .env defaults)
+  `
+  CREATE TABLE settings (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL, -- JSON
+    updated_at TEXT NOT NULL
+  );
+  `,
+
+  // v4 — messages she wrote on her own ("she writes first")
+  `
+  -- NULL = a normal reply; 'opening' = first message she generated for a chat
+  -- without a fixed greeting; 'nudge' = she wrote after a silence.
+  ALTER TABLE messages ADD COLUMN kind TEXT CHECK (kind IN ('opening', 'nudge'));
+  `,
 ];

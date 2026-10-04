@@ -307,7 +307,7 @@ describe('ImageService + ChatService.sendPhoto', () => {
     const { session } = chat.createSession('aria');
     await expect(chat.sendPhoto(session.id, '')).rejects.toThrow(ComfyError);
     expect(comfy.freed).toBe(1);
-    expect(await images.status()).toEqual({ available: true, checkpoint: 'sdxl.safetensors' });
+    expect(await images.status()).toMatchObject({ available: true, checkpoint: 'sdxl.safetensors' });
     comfy.checkpoints = ['other.safetensors'];
     expect((await images.status()).reason).toMatch(/not found in ComfyUI/);
     const none = await setupImages({ checkpoint: undefined });

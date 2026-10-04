@@ -2,13 +2,15 @@
  * LlmProvider for any server exposing the OpenAI Chat Completions API:
  * Ollama (/v1), llama.cpp server, KoboldCpp, LM Studio, vLLM…
  */
+import { resolve, type Live } from '../util/resolve.js';
 import { parseSseData } from './sse.js';
 import { LlmHttpError, type ChatMessage, type GenerationOptions, type LlmProvider } from './types.js';
 
 export interface OpenAiCompatOptions {
   /** Base URL without the `/v1` suffix, e.g. http://127.0.0.1:11434 */
   baseUrl: string;
-  model: string;
+  /** Model name, or a function returning the current one. */
+  model: Live<string>;
   apiKey?: string | undefined;
   /** Max time to wait for response headers (model loading can be slow). */
   connectTimeoutMs?: number;
@@ -54,7 +56,7 @@ export class OpenAiCompatProvider implements LlmProvider {
         headers: this.headers(),
         signal,
         body: JSON.stringify({
-          model: this.opts.model,
+          model: resolve(this.opts.model),
           messages,
           stream: true,
           max_tokens: options.maxTokens,

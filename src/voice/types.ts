@@ -1,4 +1,5 @@
 /** Voice abstractions: the HTTP layer only depends on these interfaces. */
+import type { TtsVoiceId } from './catalog.js';
 
 export interface AudioClip {
   /** Mono PCM in [-1, 1]. */
@@ -12,7 +13,10 @@ export interface SpeechToText {
 }
 
 export interface TextToSpeech {
-  synthesize(text: string): Promise<AudioClip>;
+  /** @param voice optional voice id (a character's own voice); default = the configured one */
+  synthesize(text: string, voice?: TtsVoiceId): Promise<AudioClip>;
+  /** Is this voice downloaded? (optional: engines with a single voice can omit it) */
+  isInstalled?(voice: TtsVoiceId): boolean;
 }
 
 export interface VoiceComponentStatus {

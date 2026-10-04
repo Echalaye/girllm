@@ -74,6 +74,7 @@ export class MemoryStore {
       ),
       get: db.prepare(`SELECT ${COLUMNS} FROM memories WHERE id = ?`),
       delete: db.prepare('DELETE FROM memories WHERE id = ?'),
+      deleteByCharacter: db.prepare('DELETE FROM memories WHERE character_id = ?'),
       touch: db.prepare('UPDATE memories SET updated_at = ? WHERE id = ?'),
       findExact: db.prepare(
         `SELECT ${COLUMNS} FROM memories WHERE character_id = ? AND lower(trim(content)) = lower(trim(?)) LIMIT 1`,
@@ -117,6 +118,11 @@ export class MemoryStore {
 
   delete(id: string): boolean {
     return Number(this.stmt.delete!.run(id).changes) > 0;
+  }
+
+  /** Forget everything about a character. @returns how many memories were deleted. */
+  deleteByCharacter(characterId: string): number {
+    return Number(this.stmt.deleteByCharacter!.run(characterId).changes);
   }
 
   /** Mark a memory as re-confirmed (it was mentioned again). */

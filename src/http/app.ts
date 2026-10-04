@@ -10,6 +10,7 @@
  *   - strict input validation (zod) and small body limits;
  *   - helmet security headers incl. a strict Content-Security-Policy.
  */
+import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import helmet from '@fastify/helmet';
@@ -18,7 +19,13 @@ import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastif
 import { z, ZodError } from 'zod';
 import type { CharacterRepository } from '../characters/characterRepository.js';
 import { toSummary } from '../characters/schema.js';
-import { type ChatService, NotFoundError, SessionBusyError, type ReplyResult } from '../chat/chatService.js';
+import {
+  type ChatEvent,
+  type ChatService,
+  NotFoundError,
+  SessionBusyError,
+  type ReplyResult,
+} from '../chat/chatService.js';
 import type { Session } from '../chat/sessionStore.js';
 import type { MemoryService } from '../memory/memoryService.js';
 import { ComfyError } from '../images/comfyClient.js';
@@ -28,7 +35,16 @@ import { MEMORY_CATEGORIES, type Memory, type MemoryStore } from '../memory/memo
 import { LlmHttpError, type LlmProvider } from '../llm/types.js';
 import { PromptTooLargeError } from '../prompt/promptBuilder.js';
 import { streamSse } from './sse.js';
-import { cleanForSpeech, MAX_TTS_CHARS } from '../voice/speechText.js';
+import { registerSettingsRoutes } from './routes/settingsRoutes.js';
+import { registerCharacterRoutes } from './routes/characterRoutes.js';
+import { CharacterRejectedError } from '../characters/characterRepository.js';
+import type { CharacterService } from '../characters/characterService.js';
+import type { FaceStore } from '../characters/faceStore.js';
+import { InvalidImageError } from '../images/imageSanitizer.js';
+import { SettingsValidationError, type SettingsService } from '../settings/settingsService.js';
+import { resolve, type Live } from '../util/resolve.js';
+import { cleanForSpeech, cleanTranscript, MAX_TTS_CHARS } from '../voice/speechText.js';
+import { TTS_VOICE_IDS, TTS_VOICES } from '../voice/catalog.js';
 import { VoiceUnavailableError, type VoiceServices, type VoiceStatus } from '../voice/types.js';
 import { decodeFloat32, encodeWav16 } from '../voice/wav.js';
 
@@ -43,13 +59,31 @@ export interface AppDeps {
   voice?: VoiceServices | undefined;
   /** Undefined when IMAGES_ENABLED=false. */
   images?: ImageService | undefined;
+  /** Character editor (optional so tests can build a minimal app). */
+  characterService?: CharacterService | undefined;
+  /** Reference faces (data/faces). */
+  faces?: FaceStore | undefined;
+  /** Live settings (optional so tests can build a minimal app). */
+  settings?: SettingsService | undefined;
+  /** MODELS_DIR (voice models), for the settings' voice list. */
+  voiceModelsDir?: string;
   /** Hosts allowed in the Host/Origin headers, e.g. ["127.0.0.1:3210"]. */
   allowedHosts: string[];
-  userName: string;
+  /** Fixed name, or a function returning the current one (live settings). */
+  userName: Live<string>;
   logger?: FastifyServerOptions['logger'];
 }
 
 const PUBLIC_DIR = fileURLToPath(new URL('../../public/', import.meta.url));
+/**
+ * The UI typeface (Bricolage Grotesque, SIL OFL), served from the npm
+ * package so no font binary lives in the repo and nothing is fetched from
+ * a CDN (the app works offline and the CSP stays 'self'). Same relative
+ * path from src/http and dist/http.
+ */
+const FONT_DIR = fileURLToPath(
+  new URL('../../node_modules/@fontsource-variable/bricolage-grotesque/files/', import.meta.url),
+);
 
 // ---- Input schemas -------------------------------------------------------
 const CharacterId = z.string().regex(/^[a-z0-9-]{1,80}$/);
@@ -60,7 +94,11 @@ const CreateSessionBody = z.object({ characterId: CharacterId });
 const PhotoBody = z.object({ request: z.string().trim().max(300).default('') });
 const ImageParams = z.object({ id: z.string().uuid() });
 
-const TtsBody = z.object({ text: z.string().trim().min(1).max(MAX_TTS_CHARS) });
+const TtsBody = z.object({
+  text: z.string().trim().min(1).max(MAX_TTS_CHARS),
+  /** Speak with this character's own voice (if she has one and it is installed). */
+  characterId: CharacterId.optional(),
+});
 
 /** Audio uploads: 16 kHz mono float32 = 64 KB/s, so 4 MB ≈ 60 s. */
 const STT_SAMPLE_RATE = 16000;
@@ -72,6 +110,7 @@ const CreateMemoryBody = z.object({
   content: z.string().trim().min(3).max(300),
 });
 const SendMessageBody = z.object({ text: z.string().trim().min(1).max(8000) });
+const InitiateBody = z.object({ reason: z.enum(['opening', 'nudge']) });
 
 /** Client view of a session (internal fields stripped). */
 function publicSession(s: Session) {
@@ -82,11 +121,12 @@ function publicSession(s: Session) {
     createdAt: s.createdAt,
     summary: s.summary,
     mood: s.mood,
-    messages: s.messages.map(({ id, role, content, imageId, createdAt }) => ({
+    messages: s.messages.map(({ id, role, content, imageId, kind, createdAt }) => ({
       id,
       role,
       content,
       imageId,
+      kind,
       createdAt,
     })),
   };
@@ -103,6 +143,9 @@ function httpError(err: unknown): { status: number; message: string } {
   if (err instanceof NotFoundError) return { status: 404, message: err.message };
   if (err instanceof SessionBusyError) return { status: 409, message: err.message };
   if (err instanceof PromptTooLargeError) return { status: 413, message: err.message };
+  if (err instanceof SettingsValidationError) return { status: 400, message: err.message };
+  if (err instanceof CharacterRejectedError) return { status: 422, message: err.message };
+  if (err instanceof InvalidImageError) return { status: 400, message: err.message };
   if (err instanceof VoiceUnavailableError) return { status: 503, message: err.message };
   if (err instanceof ImageUnavailableError) return { status: 503, message: err.message };
   if (err instanceof ImageRefusedError) return { status: 422, message: err.message };
@@ -167,7 +210,27 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     void reply.code(status).send({ error: message });
   });
 
+  // Raw uploads: audio for /api/stt (4 MB, the default here), card files and
+  // face images (their routes raise the limit with a route-level bodyLimit,
+  // which takes precedence). JSON routes keep the 64 KB limit.
+  app.addContentTypeParser(
+    'application/octet-stream',
+    { parseAs: 'buffer', bodyLimit: MAX_STT_BYTES },
+    (_req, body, done) => {
+      done(null, body);
+    },
+  );
+
   await app.register(fastifyStatic, { root: PUBLIC_DIR, prefix: '/' });
+  if (existsSync(FONT_DIR)) {
+    await app.register(fastifyStatic, {
+      root: FONT_DIR,
+      prefix: '/fonts/',
+      decorateReply: false, // already decorated by the first registration
+      allowedPath: (path) => path.endsWith('.woff2'),
+      maxAge: '30d',
+    });
+  }
 
   // ---- Routes ------------------------------------------------------------
 
@@ -176,9 +239,38 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     return { status: llm.ok ? 'ok' : 'degraded', llm };
   });
 
-  app.get('/api/config', async () => ({ userName: deps.userName, memoryEnabled: Boolean(deps.memory) }));
+  app.get('/api/config', async () => ({
+    userName: resolve(deps.userName),
+    memoryEnabled: Boolean(deps.memory),
+    // The page uses it to decide when to ask "may she write first?" (the server still decides).
+    proactiveAfterMinutes: deps.settings?.get().proactiveAfterMinutes ?? 0,
+  }));
 
-  app.get('/api/characters', async () => deps.characters.list().map(toSummary));
+  if (deps.settings) {
+    registerSettingsRoutes(app, {
+      settings: deps.settings,
+      llm: deps.llm,
+      images: deps.images,
+      voiceModelsDir: deps.voiceModelsDir ?? './models',
+    });
+  }
+
+  app.get('/api/characters', async () =>
+    deps.characters.list().map((c) => ({
+      ...toSummary(c),
+      style: c.style,
+      hasFace: deps.faces?.get(c.id) !== undefined,
+    })),
+  );
+
+  if (deps.characterService && deps.faces) {
+    registerCharacterRoutes(app, {
+      characters: deps.characters,
+      characterService: deps.characterService,
+      faces: deps.faces,
+      images: deps.images,
+    });
+  }
 
   app.post('/api/sessions', async (request, reply) => {
     const { characterId } = CreateSessionBody.parse(request.body);
@@ -279,21 +371,21 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
 
   // ---- Voice -----------------------------------------------------------------
 
-  // Raw audio uploads for /api/stt (other routes keep the 64 KB JSON limit).
-  app.addContentTypeParser(
-    'application/octet-stream',
-    { parseAs: 'buffer', bodyLimit: MAX_STT_BYTES },
-    (_req, body, done) => {
-      done(null, body);
-    },
-  );
-
   const voiceDisabled = { available: false, model: '', reason: 'disabled (VOICE_ENABLED=false)' };
 
-  app.get('/api/voice', async (): Promise<VoiceStatus> => ({
-    stt: deps.voice ? deps.voice.stt.status() : voiceDisabled,
-    tts: deps.voice ? deps.voice.tts.status() : voiceDisabled,
-  }));
+  app.get(
+    '/api/voice',
+    async (): Promise<VoiceStatus & { voices: Array<{ id: string; description: string; installed: boolean }> }> => ({
+      stt: deps.voice ? deps.voice.stt.status() : voiceDisabled,
+      tts: deps.voice ? deps.voice.tts.status() : voiceDisabled,
+      // For the character editor's "her voice" list.
+      voices: TTS_VOICE_IDS.map((id) => ({
+        id,
+        description: TTS_VOICES[id].description,
+        installed: Boolean(deps.voice?.tts.isInstalled?.(id)),
+      })),
+    }),
+  );
 
   /** Body: little-endian float32 mono PCM at 16 kHz. Returns { text }. */
   app.post('/api/stt', async (request) => {
@@ -307,40 +399,58 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     const samples = decodeFloat32(request.body);
     if (samples.length < STT_SAMPLE_RATE * MIN_STT_SECONDS) return { text: '' }; // just a click
     const text = await deps.voice.stt.transcribe({ samples, sampleRate: STT_SAMPLE_RATE });
-    return { text };
+    return { text: cleanTranscript(text) };
   });
 
   /** Body: { text }. Returns a WAV file (or 204 if nothing is speakable). */
   app.post('/api/tts', async (request, reply) => {
     if (!deps.voice) throw new VoiceUnavailableError('Voice is disabled');
-    const speech = cleanForSpeech(TtsBody.parse(request.body).text);
+    const body = TtsBody.parse(request.body);
+    const speech = cleanForSpeech(body.text);
     if (!speech) return reply.code(204).send();
-    const audio = await deps.voice.tts.synthesize(speech);
+    // Her own voice when set and downloaded; otherwise the default one.
+    const own = body.characterId ? deps.characters.get(body.characterId)?.voice : undefined;
+    const voice = own && deps.voice.tts.isInstalled?.(own) ? own : undefined;
+    const audio = await deps.voice.tts.synthesize(speech, voice);
     return reply
       .header('Content-Type', 'audio/wav')
       .header('Cache-Control', 'no-store')
       .send(encodeWav16(audio.samples, audio.sampleRate));
   });
 
-  /** Shared SSE handler for "send message" and "regenerate". */
+  /** Shared SSE handler for "send message", "regenerate" and "she writes first". */
   const streamReply = (
     request: Parameters<typeof streamSse>[0],
     reply: Parameters<typeof streamSse>[1],
-    run: (onToken: (t: string) => void, signal: AbortSignal) => Promise<ReplyResult>,
+    run: (onToken: (t: string) => void, signal: AbortSignal, onEvent: (e: ChatEvent) => void) => Promise<ReplyResult>,
   ) =>
     streamSse(
       request,
       reply,
       async (send, signal) => {
-        const result = await run((text) => {
-          send('token', { text });
-        }, signal);
-        send('done', {
-          messageId: result.message?.id ?? null,
-          aborted: result.aborted,
-          estimatedPromptTokens: result.estimatedTokens,
-          droppedMessages: result.droppedMessages,
-        });
+        await run(
+          (text) => {
+            send('token', { text });
+          },
+          signal,
+          (e) => {
+            // "done" comes as soon as the text is complete; a photo may follow.
+            if (e.type === 'done') {
+              send('done', {
+                messageId: e.result.message?.id ?? null,
+                aborted: e.result.aborted,
+                estimatedPromptTokens: e.result.estimatedTokens,
+                droppedMessages: e.result.droppedMessages,
+              });
+            } else if (e.type === 'photo') {
+              send('photo', { messageId: e.messageId, imageId: e.imageId });
+            } else if (e.type === 'photo_error') {
+              send('photo_error', { message: httpError(e.error).message });
+            } else {
+              send('photo_start', {});
+            }
+          },
+        );
       },
       (err) => httpError(err).message,
     );
@@ -350,13 +460,29 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     const { id } = SessionParams.parse(request.params);
     const { text } = SendMessageBody.parse(request.body);
     deps.chat.getSession(id); // 404 early
-    await streamReply(request, reply, (onToken, signal) => deps.chat.sendMessage(id, text, onToken, signal));
+    await streamReply(request, reply, (onToken, signal, onEvent) =>
+      deps.chat.sendMessage(id, text, onToken, signal, onEvent),
+    );
   });
 
   app.post('/api/sessions/:id/regenerate', async (request, reply) => {
     const { id } = SessionParams.parse(request.params);
     deps.chat.getSession(id);
-    await streamReply(request, reply, (onToken, signal) => deps.chat.regenerate(id, onToken, signal));
+    await streamReply(request, reply, (onToken, signal, onEvent) => deps.chat.regenerate(id, onToken, signal, onEvent));
+  });
+
+  /**
+   * She writes first: the opening of a chat without a fixed greeting, or a
+   * message after a silence. 204 when it isn't the moment (the server
+   * decides, the page only asks).
+   */
+  app.post('/api/sessions/:id/initiate', async (request, reply) => {
+    const { id } = SessionParams.parse(request.params);
+    const { reason } = InitiateBody.parse(request.body);
+    if (!deps.chat.canInitiate(id, reason)) return reply.code(204).send();
+    await streamReply(request, reply, (onToken, signal, onEvent) =>
+      deps.chat.initiate(id, reason, onToken, signal, onEvent),
+    );
   });
 
   return app;

@@ -5,12 +5,14 @@
  *   GET  /view?...        download the resulting image
  *   POST /free            unload models / free VRAM
  *   POST /interrupt       cancel the running job
- *   GET  /object_info/... list installed checkpoints (health check)
+ *   GET  /object_info/... list installed checkpoints and custom nodes (health check)
+ *   POST /upload/image    put the reference face in ComfyUI's input folder
  *
  * Polling /history (instead of the progress websocket) keeps this small and
  * dependency-free; at one request every 500 ms the overhead is negligible.
  */
 import { setTimeout as sleep } from 'node:timers/promises';
+import { CLIP_VISION_MODEL, FACE_IPADAPTER_MODEL } from './ipAdapter.js';
 import type { ComfyWorkflow } from './workflow.js';
 
 export interface ComfyClientOptions {
@@ -63,6 +65,68 @@ export class ComfyClient {
       return { ok: true, checkpoints: Array.isArray(list) ? list : [] };
     } catch (err) {
       return { ok: false, error: (err as Error).message };
+    }
+  }
+
+  /**
+   * Can ComfyUI apply a reference face? (IP-Adapter nodes + both models)
+   * The reason says what to install when it can't.
+   */
+  async faceSupport(): Promise<{ ready: boolean; reason?: string }> {
+    const setup = 'run: npm run setup:images, then restart ComfyUI';
+    const advanced = await this.nodeInputs('IPAdapterAdvanced');
+    if (!advanced) return { ready: false, reason: `IP-Adapter nodes not installed (${setup})` };
+    // Refuse a version of the nodes whose inputs differ from what the workflow sends.
+    const expected = ['model', 'ipadapter', 'image', 'weight', 'weight_type', 'start_at', 'end_at', 'embeds_scaling'];
+    const missing = expected.filter((k) => !(k in advanced));
+    if (missing.length)
+      return { ready: false, reason: `unexpected IP-Adapter nodes version (missing ${missing.join(', ')})` };
+    const ipadapters = (await this.nodeInputs('IPAdapterModelLoader'))?.ipadapter_file?.[0];
+    if (!Array.isArray(ipadapters) || !ipadapters.includes(FACE_IPADAPTER_MODEL.file)) {
+      return { ready: false, reason: `${FACE_IPADAPTER_MODEL.file} not found (${setup})` };
+    }
+    const clips = (await this.nodeInputs('CLIPVisionLoader'))?.clip_name?.[0];
+    if (!Array.isArray(clips) || !clips.includes(CLIP_VISION_MODEL.file)) {
+      return { ready: false, reason: `${CLIP_VISION_MODEL.file} not found (${setup})` };
+    }
+    return { ready: true };
+  }
+
+  /**
+   * Upload an image into ComfyUI's input folder (overwriting a file with the
+   * same name). @returns the name to give to a LoadImage node.
+   */
+  async uploadImage(bytes: Buffer, fileName: string, type: 'image/png' | 'image/jpeg'): Promise<string> {
+    const form = new FormData();
+    form.append('image', new Blob([new Uint8Array(bytes)], { type }), fileName);
+    form.append('type', 'input');
+    form.append('overwrite', 'true');
+    const res = await this.fetchImpl(`${this.opts.baseUrl}/upload/image`, {
+      method: 'POST',
+      body: form,
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!res.ok) throw new ComfyError(`ComfyUI refused the reference face (${res.status})`);
+    const body = (await res.json().catch(() => ({}))) as { name?: string; subfolder?: string };
+    if (!body.name) throw new ComfyError('ComfyUI did not return the uploaded file name');
+    return body.subfolder ? `${body.subfolder}/${body.name}` : body.name;
+  }
+
+  /** Required + optional inputs of a node class, or undefined if the node isn't installed. */
+  private async nodeInputs(nodeClass: string): Promise<Record<string, unknown[]> | undefined> {
+    try {
+      const res = await this.fetchImpl(`${this.opts.baseUrl}/object_info/${encodeURIComponent(nodeClass)}`, {
+        signal: AbortSignal.timeout(3000),
+      });
+      if (!res.ok) return undefined;
+      const body = (await res.json()) as Record<
+        string,
+        { input?: { required?: Record<string, unknown[]>; optional?: Record<string, unknown[]> } } | undefined
+      >;
+      const info = body[nodeClass];
+      return info ? { ...(info.input?.required ?? {}), ...(info.input?.optional ?? {}) } : undefined;
+    } catch {
+      return undefined;
     }
   }
 

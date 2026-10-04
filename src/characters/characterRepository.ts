@@ -1,22 +1,62 @@
 /**
- * In-memory registry of the character cards found in CHARACTERS_DIR.
+ * Registry of the character cards in CHARACTERS_DIR, editable from the app.
  *
- * Cards are read once at startup. Client requests only ever reference a
- * character by id (a lookup in this map), never by path, so there is no
- * path-traversal surface.
+ * Client requests only ever reference a character by id (a lookup in this
+ * map), never by path: file names are derived from slugified names inside
+ * CHARACTERS_DIR, so there is no path-traversal surface.
+ *
+ * Edited and created characters are saved as Character Card V2 JSON, so
+ * they stay compatible with SillyTavern & co.
  */
-import { readdir } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
-import { loadCardFile } from './cardLoader.js';
-import type { Character } from './schema.js';
+import { existsSync } from 'node:fs';
+import { mkdir, readdir, rename, rm } from 'node:fs/promises';
+import { basename, dirname, extname, join, resolve } from 'node:path';
+import { writeFileAtomic } from '../util/atomicWrite.js';
+import { Mutex } from '../util/mutex.js';
+import { cardStatesMinorAge, mentionsMinor } from '../images/safety.js';
+import { loadCardFile, parseCardObject, slugify } from './cardLoader.js';
+import {
+  characterFromCard,
+  readAppearance,
+  readStyle,
+  readVoice,
+  toInput,
+  type CardFields,
+  type Character,
+  type CharacterInput,
+} from './schema.js';
 
 export interface Logger {
   info(msg: string): void;
   warn(msg: string): void;
 }
 
+/** Thrown when a card describes a minor: girllm only supports adult characters. */
+export class CharacterRejectedError extends Error {
+  constructor() {
+    super('Characters must be adults. Remove any age under 18 from the card.');
+    this.name = 'CharacterRejectedError';
+  }
+}
+
+/** @throws CharacterRejectedError if the card states an under-18 age or a minor appearance. */
+export function assertAdultCharacter(fields: Pick<CardFields, 'description' | 'personality' | 'scenario' | 'first_mes' | 'system_prompt'> & { appearance?: string }): void {
+  const text = [fields.description, fields.personality, fields.scenario, fields.first_mes, fields.system_prompt].join('\n');
+  if (cardStatesMinorAge(text) || mentionsMinor(fields.appearance ?? '')) throw new CharacterRejectedError();
+}
+
+/** Folder (inside CHARACTERS_DIR) where replaced PNG cards are kept, not loaded. */
+const ORIGINALS_DIR = '.originals';
+
 export class CharacterRepository {
-  private constructor(private readonly byId: ReadonlyMap<string, Character>) {}
+  /** Serializes writes: two concurrent creations must not pick the same id. */
+  private readonly writes = new Mutex();
+
+  private constructor(
+    private readonly byId: Map<string, Character>,
+    /** Absolute CHARACTERS_DIR; undefined = read-only (tests). */
+    private readonly dir: string | undefined,
+  ) {}
 
   /**
    * Load every .json/.png card of a directory. Invalid cards are logged and
@@ -46,12 +86,12 @@ export class CharacterRepository {
     }
 
     log.info(`Loaded ${byId.size} character card(s) from ${absDir}`);
-    return new CharacterRepository(byId);
+    return new CharacterRepository(byId, absDir);
   }
 
-  /** Build a repository from already-loaded characters (tests). */
+  /** Build a read-only repository from already-loaded characters (tests). */
   static fromCharacters(characters: Character[]): CharacterRepository {
-    return new CharacterRepository(new Map(characters.map((c) => [c.id, c])));
+    return new CharacterRepository(new Map(characters.map((c) => [c.id, c])), undefined);
   }
 
   get(id: string): Character | undefined {
@@ -60,5 +100,162 @@ export class CharacterRepository {
 
   list(): Character[] {
     return [...this.byId.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /**
+   * Create (no `id`) or update a character, and save it as a V2 JSON card.
+   * The id never changes on update, even if the name does (chats and
+   * memories reference it).
+   */
+  save(input: CharacterInput, id?: string): Promise<Character> {
+    return this.writes.run(() => this.saveNow(input, id));
+  }
+
+  private async saveNow(input: CharacterInput, id?: string): Promise<Character> {
+    const dir = this.requireWritable();
+    const existing = id ? this.byId.get(id) : undefined;
+    if (id && !existing) throw new Error(`Character ${id} not found`);
+    assertAdultCharacter(input);
+
+    const finalId = existing?.id ?? this.newId(input.name);
+    const path = join(dir, `${finalId}.json`);
+    const card = this.toCardJson(input, existing);
+    // Round-trip through the loader's validation: what we write must load.
+    const fields = parseCardObject(JSON.parse(JSON.stringify(card)));
+    await writeFileAtomic(path, `${JSON.stringify(card, null, 2)}\n`);
+
+    // The card now lives in <id>.json. If it came from another file (a PNG
+    // card, or a JSON with a different name), move that one aside so it isn't
+    // loaded again as a duplicate (kept, not deleted).
+    if (existing && resolve(existing.sourceFile) !== path) {
+      await this.moveToOriginals(existing.sourceFile);
+    }
+
+    const character = characterFromCard(fields, finalId, path);
+    this.byId.set(finalId, character);
+    return character;
+  }
+
+  /** Validate and add a card file's content (import from SillyTavern, chub.ai…). */
+  async import(card: CardFields): Promise<Character> {
+    assertAdultCharacter({ ...card, appearance: readAppearance(card.extensions) });
+    return this.save({
+      name: card.name,
+      description: card.description,
+      personality: card.personality,
+      scenario: card.scenario,
+      first_mes: card.first_mes,
+      mes_example: card.mes_example,
+      system_prompt: card.system_prompt,
+      post_history_instructions: card.post_history_instructions,
+      creator_notes: card.creator_notes,
+      tags: card.tags.slice(0, 20).map((t) => t.slice(0, 40)).filter(Boolean),
+      style: readStyle(card.extensions),
+      appearance: readAppearance(card.extensions),
+      voice: readVoice(card.extensions) ?? '',
+      // Imported lorebooks keep their entries (only the standard fields).
+      lorebook: (card.character_book?.entries ?? [])
+        .filter((e) => e.content.trim())
+        .slice(0, 200)
+        .map((e) => ({
+          name: (e.name ?? '').slice(0, 200),
+          keys: e.keys.map((k) => k.trim()).filter(Boolean).slice(0, 30),
+          content: e.content.trim(),
+          enabled: e.enabled,
+          constant: e.constant,
+          case_sensitive: e.case_sensitive,
+          insertion_order: Math.max(-10_000, Math.min(10_000, Math.round(e.insertion_order))),
+        })),
+    });
+  }
+
+  /** Delete the card file (PNG cards are moved aside rather than deleted). */
+  remove(id: string): Promise<boolean> {
+    return this.writes.run(async () => {
+      this.requireWritable();
+      const existing = this.byId.get(id);
+      if (!existing) return false;
+      if (extname(existing.sourceFile).toLowerCase() === '.png') await this.moveToOriginals(existing.sourceFile);
+      else await rm(existing.sourceFile, { force: true });
+      this.byId.delete(id);
+      return true;
+    });
+  }
+
+  /** V2 card JSON for export (same format as the saved file). */
+  exportCard(id: string): object | undefined {
+    const c = this.byId.get(id);
+    return c ? this.toCardJson(toInput(c), c) : undefined;
+  }
+
+  // ---------------------------------------------------------------- helpers
+
+  private requireWritable(): string {
+    if (!this.dir) throw new Error('This character repository is read-only');
+    return this.dir;
+  }
+
+  /** Unique id from the name, not used by a loaded card nor an existing file. */
+  private newId(name: string): string {
+    const base = slugify(name);
+    let id = base;
+    for (let n = 2; this.byId.has(id) || existsSync(join(this.dir!, `${id}.json`)); n++) id = `${base}-${n}`;
+    return id;
+  }
+
+  private toCardJson(input: CharacterInput, existing?: Character) {
+    const extensions = { ...(existing?.extensions ?? {}) };
+    const girllm = { ...((extensions.girllm as Record<string, unknown> | undefined) ?? {}) };
+    girllm.style = input.style;
+    if (input.appearance) girllm.appearance = input.appearance;
+    else delete girllm.appearance;
+    if (input.voice) girllm.voice = input.voice;
+    else delete girllm.voice;
+    extensions.girllm = girllm;
+    // Keep the book's own settings (name, scan depth, budget…); entries come from the editor.
+    const book = input.lorebook.length
+      ? {
+          ...(existing?.character_book ?? {}),
+          extensions: existing?.character_book?.extensions ?? {},
+          entries: input.lorebook.map((e, i) => ({
+            keys: e.keys,
+            content: e.content,
+            extensions: {},
+            enabled: e.enabled,
+            insertion_order: e.insertion_order,
+            case_sensitive: e.case_sensitive,
+            constant: e.constant,
+            ...(e.name ? { name: e.name } : {}),
+            id: i,
+          })),
+        }
+      : undefined;
+    return {
+      spec: 'chara_card_v2',
+      spec_version: '2.0',
+      data: {
+        name: input.name,
+        description: input.description,
+        personality: input.personality,
+        scenario: input.scenario,
+        first_mes: input.first_mes,
+        mes_example: input.mes_example,
+        system_prompt: input.system_prompt,
+        post_history_instructions: input.post_history_instructions,
+        creator_notes: input.creator_notes,
+        alternate_greetings: existing?.alternate_greetings ?? [],
+        tags: input.tags,
+        creator: existing?.creator ?? '',
+        character_version: existing?.character_version ?? '',
+        extensions,
+        ...(book ? { character_book: book } : {}),
+      },
+    };
+  }
+
+  private async moveToOriginals(file: string): Promise<void> {
+    const target = join(dirname(file), ORIGINALS_DIR, basename(file));
+    await mkdir(dirname(target), { recursive: true });
+    await rename(file, existsSync(target) ? `${target}.${Date.now()}` : target);
   }
 }
