@@ -11,6 +11,7 @@
  */
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { createWriteStream, mkdirSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
 import { loadConfig } from '../src/config.js';
 import { comfyCommand, isLocalUrl, isStale, isUp, waitUntilUp } from './launcherLib.js';
@@ -108,9 +109,11 @@ async function ensureComfy(url: string, dir: string | undefined, logsDir: string
 function buildIfNeeded(): void {
   if (!isStale(join(ROOT, 'src'), join(ROOT, 'dist', 'index.js'))) return;
   log('building girllm…');
-  const npm = isWindows ? 'npm.cmd' : 'npm';
-  // shell is required to run .cmd files on Windows (Node >= 20 security change).
-  const result = spawnSync(npm, ['run', 'build'], { cwd: ROOT, stdio: 'inherit', shell: isWindows });
+  // Same as `npm run build`, but runs the TypeScript compiler directly with
+  // this Node: no npm.cmd, so no shell on Windows (DEP0190: arguments passed
+  // through a shell are concatenated, not escaped).
+  const tsc = createRequire(import.meta.url).resolve('typescript/bin/tsc');
+  const result = spawnSync(process.execPath, [tsc, '-p', 'tsconfig.build.json'], { cwd: ROOT, stdio: 'inherit' });
   if (result.status !== 0) throw new Error('Build failed (see the errors above)');
 }
 

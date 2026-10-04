@@ -25,6 +25,7 @@ export function makeCharacter(overrides: Partial<Character> = {}): Character {
     extensions: {},
     appearance: '',
     style: 'roleplay',
+    voice: undefined,
     ...overrides,
   };
 }
@@ -66,7 +67,7 @@ export function makeStore(): { db: Db; store: SqliteSessionStore } {
  */
 export class ScriptedLlm implements LlmProvider {
   calls: ChatMessage[][] = [];
-  constructor(private readonly script: { chat?: string; summary?: string; extraction?: string; photo?: string } = {}) {}
+  constructor(public script: { chat?: string; summary?: string; extraction?: string; photo?: string } = {}) {}
 
   async *streamChat(messages: ChatMessage[]): AsyncGenerator<string> {
     this.calls.push(messages);
@@ -139,6 +140,13 @@ export class FakeComfy {
   pollsBeforeDone = 1;
   failWith: 'node_error' | 'execution' | 'not_png' | null = null;
   checkpoints = ['sdxl.safetensors'];
+  /** IP-Adapter install state (step 4d). */
+  ipAdapter = {
+    nodes: true,
+    ipadapterFiles: ['ip-adapter-plus-face_sdxl_vit-h.safetensors'],
+    clipFiles: ['CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors'],
+  };
+  uploads: Array<{ name: string; size: number }> = [];
   private polls = 0;
 
   fetch = (async (input: string | URL, init?: RequestInit) => {
@@ -146,6 +154,39 @@ export class FakeComfy {
     const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
     if (url.pathname === '/object_info/CheckpointLoaderSimple') {
       return json({ CheckpointLoaderSimple: { input: { required: { ckpt_name: [this.checkpoints] } } } });
+    }
+    if (url.pathname === '/object_info/IPAdapterAdvanced') {
+      if (!this.ipAdapter.nodes) return json({});
+      const required = Object.fromEntries(
+        [
+          'model',
+          'ipadapter',
+          'image',
+          'weight',
+          'weight_type',
+          'combine_embeds',
+          'start_at',
+          'end_at',
+          'embeds_scaling',
+        ].map((k) => [k, ['X']]),
+      );
+      return json({ IPAdapterAdvanced: { input: { required, optional: { clip_vision: ['CLIP_VISION'] } } } });
+    }
+    if (url.pathname === '/object_info/IPAdapterModelLoader') {
+      return json(
+        this.ipAdapter.nodes
+          ? { IPAdapterModelLoader: { input: { required: { ipadapter_file: [this.ipAdapter.ipadapterFiles] } } } }
+          : {},
+      );
+    }
+    if (url.pathname === '/object_info/CLIPVisionLoader') {
+      return json({ CLIPVisionLoader: { input: { required: { clip_name: [this.ipAdapter.clipFiles] } } } });
+    }
+    if (url.pathname === '/upload/image') {
+      const form = init?.body as FormData;
+      const file = form.get('image') as File;
+      this.uploads.push({ name: file.name, size: file.size });
+      return json({ name: file.name, subfolder: '', type: 'input' });
     }
     if (url.pathname === '/prompt') {
       if (this.failWith === 'node_error') {

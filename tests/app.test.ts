@@ -275,7 +275,9 @@ describe('HTTP API - photos', () => {
 
   it('reports status, generates a photo and serves it', async () => {
     await makePhotoApp();
-    expect((await app.inject({ method: 'GET', url: '/api/images/status', headers: { host: HOST } })).json()).toEqual({
+    expect(
+      (await app.inject({ method: 'GET', url: '/api/images/status', headers: { host: HOST } })).json(),
+    ).toMatchObject({
       available: true,
       checkpoint: 'sdxl.safetensors',
     });

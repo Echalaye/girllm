@@ -141,9 +141,12 @@ export function isTtsVoiceInstalled(modelsDir: string, voice: TtsVoiceId): boole
 
 export class SherpaTextToSpeech implements TextToSpeech {
   private readonly mutex = new Mutex();
-  private tts?: Promise<OfflineTts>;
-  /** Voice the loaded engine was built with (reload when it changes). */
-  private loadedVoice?: TtsVoiceId;
+  /**
+   * Loaded engines by voice. Two are kept (≈ 60 MB each) so switching
+   * between two characters doesn't reload a model at every sentence.
+   */
+  private readonly engines = new Map<TtsVoiceId, Promise<OfflineTts>>();
+  private static readonly MAX_ENGINES = 2;
 
   /** @param options fixed, or a function returning the current ones (live settings). */
   constructor(private readonly options: Live<SherpaTtsOptions>) {}
@@ -159,24 +162,35 @@ export class SherpaTextToSpeech implements TextToSpeech {
       : { available: false, model: voice, reason: 'voice not downloaded (run: npm run setup:voice)' };
   }
 
-  synthesize(text: string): Promise<AudioClip> {
+  /** Is this voice downloaded? (per-character voices fall back to the default one otherwise) */
+  isInstalled(voice: TtsVoiceId): boolean {
+    return isTtsVoiceInstalled(this.opts.modelsDir, voice);
+  }
+
+  /** @param voice a character's own voice; default = the one from the settings */
+  synthesize(text: string, voice?: TtsVoiceId): Promise<AudioClip> {
     return this.mutex.run(async () => {
       const o = this.opts; // read once: voice and speed of THIS request
-      const tts = await this.load(o);
-      const audio = await tts.generateAsync({ text, sid: TTS_VOICES[o.voice].speakerId, speed: o.speed });
+      const id = voice ?? o.voice;
+      const tts = await this.load(id, o);
+      const audio = await tts.generateAsync({ text, sid: TTS_VOICES[id].speakerId, speed: o.speed });
       return { samples: audio.samples, sampleRate: audio.sampleRate };
     });
   }
 
-  private load(o: SherpaTtsOptions) {
-    if (this.tts && o.voice === this.loadedVoice) return this.tts;
-
-    if (!isTtsVoiceInstalled(o.modelsDir, o.voice)) {
+  private load(voice: TtsVoiceId, o: SherpaTtsOptions): Promise<OfflineTts> {
+    const cached = this.engines.get(voice);
+    if (cached) {
+      // Most recently used goes last (Map keeps insertion order).
+      this.engines.delete(voice);
+      this.engines.set(voice, cached);
+      return cached;
+    }
+    if (!isTtsVoiceInstalled(o.modelsDir, voice)) {
       throw new VoiceUnavailableError('Text-to-speech unavailable: voice not downloaded (run: npm run setup:voice)');
     }
-    const files = ttsFiles(o.modelsDir, o.voice);
-    this.loadedVoice = o.voice;
-    this.tts = loadSherpa().then((sherpa) =>
+    const files = ttsFiles(o.modelsDir, voice);
+    const engine = loadSherpa().then((sherpa) =>
       sherpa.OfflineTts.createAsync({
         model: {
           vits: { model: files.model, tokens: files.tokens, dataDir: files.dataDir },
@@ -186,7 +200,12 @@ export class SherpaTextToSpeech implements TextToSpeech {
         maxNumSentences: 1,
       }),
     );
-    this.tts.catch(() => (this.tts = undefined));
-    return this.tts;
+    engine.catch(() => this.engines.delete(voice));
+    this.engines.set(voice, engine);
+    // Evict the least recently used engine (the native object is freed by GC).
+    while (this.engines.size > SherpaTextToSpeech.MAX_ENGINES) {
+      this.engines.delete(this.engines.keys().next().value!);
+    }
+    return engine;
   }
 }

@@ -6,7 +6,7 @@
  * context size, folders, providers) stays in `.env` only.
  */
 import { z } from 'zod';
-import type { AppConfig } from '../config.js';
+import { PHOTO_FREQUENCIES, type AppConfig } from '../config.js';
 import { TTS_VOICE_IDS, type TtsVoiceId } from '../voice/catalog.js';
 
 /** Safe identifiers for model / checkpoint / sampler names (no quotes, no shell chars). */
@@ -43,6 +43,8 @@ export const SettingsSchema = z.object({
   minP: z.number().min(0).max(1),
   repeatPenalty: z.number().min(0.5).max(2),
   maxReplyTokens: z.number().int().min(16).max(2048),
+  /** Minutes of silence before she writes first; 0 = never. */
+  proactiveAfterMinutes: z.number().int().min(0).max(10_080),
   // --- Voice
   ttsVoice: z.enum(TTS_VOICE_IDS),
   ttsSpeed: z.number().min(0.5).max(2),
@@ -60,6 +62,10 @@ export const SettingsSchema = z.object({
   imageHiresScale: z.number().min(1).max(2),
   imageHiresDenoise: z.number().min(0.1).max(0.7),
   imageHiresSteps: z.number().int().min(4).max(60),
+  /** Reference face strength (IP-Adapter); 0 = off. */
+  imageFaceWeight: z.number().min(0).max(1),
+  /** Photos she sends on her own. */
+  photoFrequency: z.enum(PHOTO_FREQUENCIES),
 });
 
 export type Settings = z.infer<typeof SettingsSchema>;
@@ -83,6 +89,7 @@ export function defaultsFromConfig(config: AppConfig): Settings {
     minP: g.minP,
     repeatPenalty: g.repeatPenalty,
     maxReplyTokens: g.maxReplyTokens,
+    proactiveAfterMinutes: config.proactiveAfterMinutes,
     ttsVoice: config.voice.ttsVoice satisfies TtsVoiceId,
     ttsSpeed: config.voice.ttsSpeed,
     sttLanguage: config.voice.sttLanguage,
@@ -96,5 +103,7 @@ export function defaultsFromConfig(config: AppConfig): Settings {
     imageHiresScale: i.hires.scale,
     imageHiresDenoise: i.hires.denoise,
     imageHiresSteps: i.hires.steps,
+    imageFaceWeight: i.faceWeight,
+    photoFrequency: i.photoFrequency,
   };
 }

@@ -11,7 +11,10 @@
 import type { OutgoingHttpHeaders } from 'node:http';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
-export type SseSend = (event: 'token' | 'done' | 'error', data: unknown) => void;
+export type SseSend = (
+  event: 'token' | 'done' | 'error' | 'photo_start' | 'photo' | 'photo_error',
+  data: unknown,
+) => void;
 
 /**
  * Take over the raw response, run `task` with an AbortSignal that fires when

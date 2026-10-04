@@ -19,7 +19,13 @@ import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastif
 import { z, ZodError } from 'zod';
 import type { CharacterRepository } from '../characters/characterRepository.js';
 import { toSummary } from '../characters/schema.js';
-import { type ChatService, NotFoundError, SessionBusyError, type ReplyResult } from '../chat/chatService.js';
+import {
+  type ChatEvent,
+  type ChatService,
+  NotFoundError,
+  SessionBusyError,
+  type ReplyResult,
+} from '../chat/chatService.js';
 import type { Session } from '../chat/sessionStore.js';
 import type { MemoryService } from '../memory/memoryService.js';
 import { ComfyError } from '../images/comfyClient.js';
@@ -38,6 +44,7 @@ import { InvalidImageError } from '../images/imageSanitizer.js';
 import { SettingsValidationError, type SettingsService } from '../settings/settingsService.js';
 import { resolve, type Live } from '../util/resolve.js';
 import { cleanForSpeech, cleanTranscript, MAX_TTS_CHARS } from '../voice/speechText.js';
+import { TTS_VOICE_IDS, TTS_VOICES } from '../voice/catalog.js';
 import { VoiceUnavailableError, type VoiceServices, type VoiceStatus } from '../voice/types.js';
 import { decodeFloat32, encodeWav16 } from '../voice/wav.js';
 
@@ -87,7 +94,11 @@ const CreateSessionBody = z.object({ characterId: CharacterId });
 const PhotoBody = z.object({ request: z.string().trim().max(300).default('') });
 const ImageParams = z.object({ id: z.string().uuid() });
 
-const TtsBody = z.object({ text: z.string().trim().min(1).max(MAX_TTS_CHARS) });
+const TtsBody = z.object({
+  text: z.string().trim().min(1).max(MAX_TTS_CHARS),
+  /** Speak with this character's own voice (if she has one and it is installed). */
+  characterId: CharacterId.optional(),
+});
 
 /** Audio uploads: 16 kHz mono float32 = 64 KB/s, so 4 MB ≈ 60 s. */
 const STT_SAMPLE_RATE = 16000;
@@ -99,6 +110,7 @@ const CreateMemoryBody = z.object({
   content: z.string().trim().min(3).max(300),
 });
 const SendMessageBody = z.object({ text: z.string().trim().min(1).max(8000) });
+const InitiateBody = z.object({ reason: z.enum(['opening', 'nudge']) });
 
 /** Client view of a session (internal fields stripped). */
 function publicSession(s: Session) {
@@ -109,11 +121,12 @@ function publicSession(s: Session) {
     createdAt: s.createdAt,
     summary: s.summary,
     mood: s.mood,
-    messages: s.messages.map(({ id, role, content, imageId, createdAt }) => ({
+    messages: s.messages.map(({ id, role, content, imageId, kind, createdAt }) => ({
       id,
       role,
       content,
       imageId,
+      kind,
       createdAt,
     })),
   };
@@ -226,7 +239,12 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     return { status: llm.ok ? 'ok' : 'degraded', llm };
   });
 
-  app.get('/api/config', async () => ({ userName: resolve(deps.userName), memoryEnabled: Boolean(deps.memory) }));
+  app.get('/api/config', async () => ({
+    userName: resolve(deps.userName),
+    memoryEnabled: Boolean(deps.memory),
+    // The page uses it to decide when to ask "may she write first?" (the server still decides).
+    proactiveAfterMinutes: deps.settings?.get().proactiveAfterMinutes ?? 0,
+  }));
 
   if (deps.settings) {
     registerSettingsRoutes(app, {
@@ -355,10 +373,19 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
 
   const voiceDisabled = { available: false, model: '', reason: 'disabled (VOICE_ENABLED=false)' };
 
-  app.get('/api/voice', async (): Promise<VoiceStatus> => ({
-    stt: deps.voice ? deps.voice.stt.status() : voiceDisabled,
-    tts: deps.voice ? deps.voice.tts.status() : voiceDisabled,
-  }));
+  app.get(
+    '/api/voice',
+    async (): Promise<VoiceStatus & { voices: Array<{ id: string; description: string; installed: boolean }> }> => ({
+      stt: deps.voice ? deps.voice.stt.status() : voiceDisabled,
+      tts: deps.voice ? deps.voice.tts.status() : voiceDisabled,
+      // For the character editor's "her voice" list.
+      voices: TTS_VOICE_IDS.map((id) => ({
+        id,
+        description: TTS_VOICES[id].description,
+        installed: Boolean(deps.voice?.tts.isInstalled?.(id)),
+      })),
+    }),
+  );
 
   /** Body: little-endian float32 mono PCM at 16 kHz. Returns { text }. */
   app.post('/api/stt', async (request) => {
@@ -378,34 +405,52 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   /** Body: { text }. Returns a WAV file (or 204 if nothing is speakable). */
   app.post('/api/tts', async (request, reply) => {
     if (!deps.voice) throw new VoiceUnavailableError('Voice is disabled');
-    const speech = cleanForSpeech(TtsBody.parse(request.body).text);
+    const body = TtsBody.parse(request.body);
+    const speech = cleanForSpeech(body.text);
     if (!speech) return reply.code(204).send();
-    const audio = await deps.voice.tts.synthesize(speech);
+    // Her own voice when set and downloaded; otherwise the default one.
+    const own = body.characterId ? deps.characters.get(body.characterId)?.voice : undefined;
+    const voice = own && deps.voice.tts.isInstalled?.(own) ? own : undefined;
+    const audio = await deps.voice.tts.synthesize(speech, voice);
     return reply
       .header('Content-Type', 'audio/wav')
       .header('Cache-Control', 'no-store')
       .send(encodeWav16(audio.samples, audio.sampleRate));
   });
 
-  /** Shared SSE handler for "send message" and "regenerate". */
+  /** Shared SSE handler for "send message", "regenerate" and "she writes first". */
   const streamReply = (
     request: Parameters<typeof streamSse>[0],
     reply: Parameters<typeof streamSse>[1],
-    run: (onToken: (t: string) => void, signal: AbortSignal) => Promise<ReplyResult>,
+    run: (onToken: (t: string) => void, signal: AbortSignal, onEvent: (e: ChatEvent) => void) => Promise<ReplyResult>,
   ) =>
     streamSse(
       request,
       reply,
       async (send, signal) => {
-        const result = await run((text) => {
-          send('token', { text });
-        }, signal);
-        send('done', {
-          messageId: result.message?.id ?? null,
-          aborted: result.aborted,
-          estimatedPromptTokens: result.estimatedTokens,
-          droppedMessages: result.droppedMessages,
-        });
+        await run(
+          (text) => {
+            send('token', { text });
+          },
+          signal,
+          (e) => {
+            // "done" comes as soon as the text is complete; a photo may follow.
+            if (e.type === 'done') {
+              send('done', {
+                messageId: e.result.message?.id ?? null,
+                aborted: e.result.aborted,
+                estimatedPromptTokens: e.result.estimatedTokens,
+                droppedMessages: e.result.droppedMessages,
+              });
+            } else if (e.type === 'photo') {
+              send('photo', { messageId: e.messageId, imageId: e.imageId });
+            } else if (e.type === 'photo_error') {
+              send('photo_error', { message: httpError(e.error).message });
+            } else {
+              send('photo_start', {});
+            }
+          },
+        );
       },
       (err) => httpError(err).message,
     );
@@ -415,13 +460,29 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     const { id } = SessionParams.parse(request.params);
     const { text } = SendMessageBody.parse(request.body);
     deps.chat.getSession(id); // 404 early
-    await streamReply(request, reply, (onToken, signal) => deps.chat.sendMessage(id, text, onToken, signal));
+    await streamReply(request, reply, (onToken, signal, onEvent) =>
+      deps.chat.sendMessage(id, text, onToken, signal, onEvent),
+    );
   });
 
   app.post('/api/sessions/:id/regenerate', async (request, reply) => {
     const { id } = SessionParams.parse(request.params);
     deps.chat.getSession(id);
-    await streamReply(request, reply, (onToken, signal) => deps.chat.regenerate(id, onToken, signal));
+    await streamReply(request, reply, (onToken, signal, onEvent) => deps.chat.regenerate(id, onToken, signal, onEvent));
+  });
+
+  /**
+   * She writes first: the opening of a chat without a fixed greeting, or a
+   * message after a silence. 204 when it isn't the moment (the server
+   * decides, the page only asks).
+   */
+  app.post('/api/sessions/:id/initiate', async (request, reply) => {
+    const { id } = SessionParams.parse(request.params);
+    const { reason } = InitiateBody.parse(request.body);
+    if (!deps.chat.canInitiate(id, reason)) return reply.code(204).send();
+    await streamReply(request, reply, (onToken, signal, onEvent) =>
+      deps.chat.initiate(id, reason, onToken, signal, onEvent),
+    );
   });
 
   return app;

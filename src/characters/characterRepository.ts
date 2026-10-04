@@ -15,7 +15,16 @@ import { writeFileAtomic } from '../util/atomicWrite.js';
 import { Mutex } from '../util/mutex.js';
 import { cardStatesMinorAge, mentionsMinor } from '../images/safety.js';
 import { loadCardFile, parseCardObject, slugify } from './cardLoader.js';
-import { readAppearance, readStyle, type CardFields, type Character, type CharacterInput } from './schema.js';
+import {
+  characterFromCard,
+  readAppearance,
+  readStyle,
+  readVoice,
+  toInput,
+  type CardFields,
+  type Character,
+  type CharacterInput,
+} from './schema.js';
 
 export interface Logger {
   info(msg: string): void;
@@ -122,13 +131,7 @@ export class CharacterRepository {
       await this.moveToOriginals(existing.sourceFile);
     }
 
-    const character: Character = {
-      ...fields,
-      id: finalId,
-      sourceFile: path,
-      appearance: readAppearance(fields.extensions),
-      style: readStyle(fields.extensions),
-    };
+    const character = characterFromCard(fields, finalId, path);
     this.byId.set(finalId, character);
     return character;
   }
@@ -149,6 +152,20 @@ export class CharacterRepository {
       tags: card.tags.slice(0, 20).map((t) => t.slice(0, 40)).filter(Boolean),
       style: readStyle(card.extensions),
       appearance: readAppearance(card.extensions),
+      voice: readVoice(card.extensions) ?? '',
+      // Imported lorebooks keep their entries (only the standard fields).
+      lorebook: (card.character_book?.entries ?? [])
+        .filter((e) => e.content.trim())
+        .slice(0, 200)
+        .map((e) => ({
+          name: (e.name ?? '').slice(0, 200),
+          keys: e.keys.map((k) => k.trim()).filter(Boolean).slice(0, 30),
+          content: e.content.trim(),
+          enabled: e.enabled,
+          constant: e.constant,
+          case_sensitive: e.case_sensitive,
+          insertion_order: Math.max(-10_000, Math.min(10_000, Math.round(e.insertion_order))),
+        })),
     });
   }
 
@@ -168,7 +185,7 @@ export class CharacterRepository {
   /** V2 card JSON for export (same format as the saved file). */
   exportCard(id: string): object | undefined {
     const c = this.byId.get(id);
-    return c ? this.toCardJson(c, c) : undefined;
+    return c ? this.toCardJson(toInput(c), c) : undefined;
   }
 
   // ---------------------------------------------------------------- helpers
@@ -192,7 +209,27 @@ export class CharacterRepository {
     girllm.style = input.style;
     if (input.appearance) girllm.appearance = input.appearance;
     else delete girllm.appearance;
+    if (input.voice) girllm.voice = input.voice;
+    else delete girllm.voice;
     extensions.girllm = girllm;
+    // Keep the book's own settings (name, scan depth, budget…); entries come from the editor.
+    const book = input.lorebook.length
+      ? {
+          ...(existing?.character_book ?? {}),
+          extensions: existing?.character_book?.extensions ?? {},
+          entries: input.lorebook.map((e, i) => ({
+            keys: e.keys,
+            content: e.content,
+            extensions: {},
+            enabled: e.enabled,
+            insertion_order: e.insertion_order,
+            case_sensitive: e.case_sensitive,
+            constant: e.constant,
+            ...(e.name ? { name: e.name } : {}),
+            id: i,
+          })),
+        }
+      : undefined;
     return {
       spec: 'chara_card_v2',
       spec_version: '2.0',
@@ -211,6 +248,7 @@ export class CharacterRepository {
         creator: existing?.creator ?? '',
         character_version: existing?.character_version ?? '',
         extensions,
+        ...(book ? { character_book: book } : {}),
       },
     };
   }

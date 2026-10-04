@@ -37,6 +37,18 @@ export function comfyCommand(
   return undefined;
 }
 
+/**
+ * The ComfyUI application folder (the one with main.py, custom_nodes/ and
+ * models/) inside an install folder: <dir>/ComfyUI for the Windows portable
+ * build, <dir> itself for a manual install.
+ * @returns undefined if the folder doesn't look like a ComfyUI install.
+ */
+export function comfyRoot(dir: string): string | undefined {
+  if (existsSync(join(dir, 'ComfyUI', 'main.py'))) return join(dir, 'ComfyUI');
+  if (existsSync(join(dir, 'main.py'))) return dir;
+  return undefined;
+}
+
 /** Newest modification time (ms) of the files under `dir` (recursive). */
 export function newestMtime(dir: string): number {
   let newest = 0;

@@ -63,8 +63,20 @@ const state = {
   /** Read replies aloud (persisted per browser). */
   speakReplies: false,
   photosAvailable: false,
+  /** Reference faces in photos: { ready, reason } from /api/images/status. */
+  faceSupport: undefined,
+  /** Voices for the character editor (from /api/voice). */
+  voices: [],
   /** Running hands-free call, if any. */
   call: null,
+  /** She writes first after this many minutes of silence (0 = never). */
+  proactiveAfterMinutes: 0,
+  /** Time (ms) of the latest message in the open chat. */
+  lastMessageAt: 0,
+  /** She already wrote first (or was told "not now") since your last message: don't ask again. */
+  nudgeBlocked: false,
+  /** Messages received while the tab was hidden (shown in the title). */
+  unread: 0,
 };
 
 const current = () => state.characters.find((c) => c.id === state.characterId);
@@ -77,7 +89,8 @@ const speaker = new Speaker(async (text) => {
   const res = await fetch('/api/tts', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text }),
+    // Her own voice, if her card has one.
+    body: JSON.stringify({ text, characterId: state.characterId ?? undefined }),
   });
   if (res.status === 204) return null; // nothing speakable (only *actions*)
   await ensureOk(res);
@@ -263,6 +276,9 @@ function photoElement(imageId) {
 }
 
 function renderSession(session) {
+  const last = session.messages.at(-1);
+  state.lastMessageAt = last ? new Date(last.createdAt).getTime() : 0;
+  state.nudgeBlocked = last?.kind === 'nudge';
   els.messages.replaceChildren();
   for (const m of session.messages) addMessage(m.role, m.content, { imageId: m.imageId });
   if (session.messages.length === 0) {
@@ -278,15 +294,26 @@ function setBusy(busy) {
 
 /**
  * POST to a streaming endpoint and render tokens into a new bubble.
- * @param {{ speak?: boolean }} [options] speak: force reading aloud (calls)
- * @returns {Promise<string>} the reply text ('' if failed or empty)
+ * Events: token…, done (text complete), then possibly photo_start → photo
+ * (or photo_error) when she decided to send a photo with her message.
+ * @param {{ speak?: boolean, quiet?: boolean }} [options]
+ *   speak: force reading aloud (calls); quiet: no "typing" bubble until the
+ *   first word arrives (she writes first: the server may decline with 204).
+ * @returns {Promise<string>} the reply text ('' if failed, empty or declined)
  */
-async function streamInto(path, payload, { speak = state.speakReplies } = {}) {
+async function streamInto(path, payload, { speak = state.speakReplies, quiet = false } = {}) {
   state.controller = new AbortController();
   setBusy(true);
-  setPresence('typing…');
-  setPortraitState('typing');
-  const bubble = addMessage('assistant', '', { pending: true });
+  let bubble = null;
+  const ensureBubble = () => {
+    if (!bubble) {
+      bubble = addMessage('assistant', '', { pending: true });
+      setPresence('typing…');
+      setPortraitState('typing');
+    }
+    return bubble;
+  };
+  if (!quiet) ensureBubble();
   let text = '';
   // Speak sentence by sentence while the reply is still being written.
   speaker.stop();
@@ -300,17 +327,34 @@ async function streamInto(path, payload, { speak = state.speakReplies } = {}) {
       signal: state.controller.signal,
     });
     await ensureOk(res);
+    if (res.status === 204) return ''; // not the moment (she writes first)
     for await (const { event, data } of readSse(res.body)) {
       if (event === 'token') {
         text += data.text;
-        renderText(bubble.body, text);
+        renderText(ensureBubble().body, text);
         splitter?.push(data.text).forEach((sentence) => speaker.enqueue(sentence));
         scrollToEnd();
       } else if (event === 'error') {
         throw new Error(data.message);
       } else if (event === 'done') {
         splitter?.flush().forEach((sentence) => speaker.enqueue(sentence));
+        if (bubble && data.messageId) bubble.wrap.dataset.id = data.messageId;
+        if (bubble) bubble.wrap.classList.remove('pending');
+        state.lastMessageAt = Date.now();
         setStatus(data.droppedMessages ? `${data.droppedMessages} older messages no longer fit in her context` : '');
+      } else if (event === 'photo_start') {
+        setPresence('sending you a photo…');
+        setPortraitState('typing');
+        ensureBubble().wrap.classList.add('photo-pending');
+      } else if (event === 'photo') {
+        const b = ensureBubble();
+        b.wrap.classList.remove('photo-pending');
+        b.wrap.classList.add('photo-msg');
+        b.wrap.prepend(photoElement(data.imageId));
+        if (document.hidden) notifyUnread();
+      } else if (event === 'photo_error') {
+        bubble?.wrap.classList.remove('photo-pending');
+        setStatus(`She couldn't send the photo: ${data.message}`, true);
       }
     }
   } catch (err) {
@@ -319,8 +363,10 @@ async function streamInto(path, payload, { speak = state.speakReplies } = {}) {
     if (err.name === 'AbortError') setStatus('Stopped');
     else setStatus(err.message, true);
   } finally {
-    bubble.wrap.classList.remove('pending');
-    if (!bubble.body.textContent) bubble.wrap.remove();
+    if (bubble) {
+      bubble.wrap.classList.remove('pending', 'photo-pending');
+      if (!bubble.body.textContent && !bubble.wrap.querySelector('img')) bubble.wrap.remove();
+    }
     state.controller = null;
     setBusy(false);
     setPresence('');
@@ -331,6 +377,45 @@ async function streamInto(path, payload, { speak = state.speakReplies } = {}) {
   }
   return text;
 }
+
+// ------------------------------------------------- she writes first --
+
+/**
+ * Ask whether she writes first: 'opening' for an empty chat, 'nudge' after
+ * a silence. The server decides (204 = not now); nothing shows until she
+ * actually starts writing.
+ */
+async function initiate(reason) {
+  if (!state.sessionId || state.controller || state.call) return;
+  if (reason === 'nudge') state.nudgeBlocked = true; // one try per silence
+  const text = await streamInto(`/api/sessions/${state.sessionId}/initiate`, { reason }, { quiet: true });
+  if (text && document.hidden) notifyUnread();
+}
+
+/** Is the chat quiet long enough for her to write first? (the server checks again) */
+function silentLongEnough() {
+  const minutes = state.proactiveAfterMinutes;
+  return minutes > 0 && state.lastMessageAt > 0 && Date.now() - state.lastMessageAt >= minutes * 60_000;
+}
+
+/** Checked every minute while the page is open. */
+function proactiveTick() {
+  if (els.input.value.trim() || recorder.recording) return; // you are writing or talking
+  if (silentLongEnough() && !state.nudgeBlocked) void initiate('nudge');
+}
+
+/** A message arrived while the tab is in the background: show it in the tab title. */
+function notifyUnread() {
+  state.unread += 1;
+  document.title = `(${state.unread}) ${herName()} · girllm`;
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && state.unread) {
+    state.unread = 0;
+    document.title = 'girllm';
+  }
+});
 
 // -------------------------------------------------------------- chats --
 
@@ -347,6 +432,12 @@ function showSession(session, character) {
   setPresence('');
   renderCharacters();
   renderSession(session);
+  // She writes first: the opening of an empty chat, or after a long silence.
+  setTimeout(() => {
+    if (state.sessionId !== session.id) return;
+    if (session.messages.length === 0) void initiate('opening');
+    else if (silentLongEnough() && !state.nudgeBlocked) void initiate('nudge');
+  }, 400);
 }
 
 async function startSession(characterId) {
@@ -405,6 +496,8 @@ async function loadCharacters() {
 async function sendText(text, options) {
   if (!text || !state.sessionId || state.controller) return '';
   addMessage('user', text);
+  state.lastMessageAt = Date.now();
+  state.nudgeBlocked = false;
   return streamInto(`/api/sessions/${state.sessionId}/messages`, { text }, options);
 }
 
@@ -490,6 +583,7 @@ async function sendPhoto() {
   autoGrow();
   // Shown right away; saved by the server only if the photo succeeds.
   const requestBubble = request ? addMessage('user', `📷 ${request}`) : null;
+  state.nudgeBlocked = false;
 
   state.controller = new AbortController();
   setBusy(true);
@@ -512,6 +606,7 @@ async function sendPhoto() {
     const { message } = await res.json();
     bubble.wrap.remove();
     addMessage('assistant', message.content, { imageId: message.imageId });
+    state.lastMessageAt = Date.now();
     if (state.speakReplies) speaker.enqueue(message.content);
     setStatus('');
   } catch (err) {
@@ -535,6 +630,7 @@ async function initPhotos() {
   const status = await api('/api/images/status').catch(() => null);
   const disabled = !status || String(status.reason ?? '').startsWith('disabled');
   state.photosAvailable = Boolean(status?.available);
+  state.faceSupport = status?.face;
   els.photo.hidden = disabled;
   els.photo.title = status?.available
     ? 'Ask for a photo (describe it in the box first, or leave it empty)'
@@ -680,6 +776,7 @@ function endCall() {
 async function initVoice() {
   const voice = await api('/api/voice').catch(() => null);
   const ttsReady = Boolean(voice?.tts.available);
+  state.voices = voice?.voices ?? [];
   const sttReady = Boolean(voice?.stt.available);
   els.voiceToggle.hidden = !ttsReady;
   state.speakReplies = ttsReady && store.get('girllm.speakReplies') === '1';
@@ -716,12 +813,15 @@ function toggleTheme() {
 const settingsPanel = new SettingsPanel({
   onSaved: (values) => {
     state.userName = values.userName;
+    state.proactiveAfterMinutes = values.proactiveAfterMinutes;
     void initPhotos(); // the image model may have changed
   },
 });
 
 const editor = new CharacterEditor({
   photosAvailable: () => state.photosAvailable,
+  faceSupport: () => state.faceSupport,
+  voices: () => state.voices,
   onSaved: (summary) => {
     report(
       (async () => {
@@ -839,6 +939,8 @@ async function init() {
   try {
     const [config, health] = await Promise.all([api('/api/config'), api('/api/health').catch(() => null)]);
     state.userName = config.userName;
+    state.proactiveAfterMinutes = config.proactiveAfterMinutes ?? 0;
+    setInterval(proactiveTick, 60_000);
     $('open-memory').hidden = !config.memoryEnabled;
     await Promise.all([loadCharacters(), initVoice(), initPhotos()]);
 

@@ -91,6 +91,10 @@
 }
 
 /* --------------------------------------------------------------- base -- */
+/* `hidden` must win over any display rule (grids, flex rows…). */
+[hidden] {
+  display: none !important;
+}
 *,
 *::before,
 *::after {
@@ -550,6 +554,25 @@ input[type='range'] {
 .msg.photo-msg .text {
   padding: 0 0.6rem;
 }
+/* She is sending a photo with this message: a placeholder where it will appear. */
+.msg.photo-pending::before {
+  content: 'photo on its way…';
+  display: grid;
+  place-items: center;
+  width: min(16rem, 100%);
+  aspect-ratio: 3 / 4;
+  margin-bottom: 0.4rem;
+  border: 1px dashed var(--line);
+  border-radius: 14px;
+  color: var(--haze);
+  font-size: var(--step--1);
+  animation: breathe-soft 1.6s ease-in-out infinite;
+}
+@keyframes breathe-soft {
+  50% {
+    opacity: 0.55;
+  }
+}
 .photo-link {
   display: block;
   margin-bottom: 0.4rem;
@@ -845,6 +868,30 @@ dialog.editor {
   width: 100%;
 }
 
+/* Lorebook entries in the editor. */
+.lore-list {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0.25rem 0 0.5rem;
+  padding: 0;
+  list-style: none;
+}
+.lore-entry {
+  display: grid;
+  gap: 0.4rem;
+  padding: 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.lore-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.lore-row button {
+  padding: 0.2rem 0.5rem;
+}
+
 /* --------------------------------------------------------------- call -- */
 .call-screen {
   position: fixed;
@@ -858,9 +905,6 @@ dialog.editor {
   padding: 2rem 1rem;
   background: var(--night);
   text-align: center;
-}
-.call-screen[hidden] {
-  display: none;
 }
 .portrait-large {
   --size: min(14rem, 50vw);

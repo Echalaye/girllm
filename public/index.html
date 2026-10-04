@@ -277,10 +277,23 @@
               <textarea name="creator_notes" rows="2" maxlength="10000"></textarea>
             </label>
           </details>
+          <details class="field more" id="lore-section">
+            <summary>Lorebook <span id="lore-count" class="small"></span></summary>
+            <p class="small muted">
+              Background facts added to her notes only when one of their keywords comes up in the conversation: her
+              family, her job, places, shared memories…
+            </p>
+            <ol id="lore-list" class="lore-list"></ol>
+            <button id="lore-add" class="ghost" type="button">Add an entry</button>
+          </details>
           <p class="small muted">Use {{char}} for her name and {{user}} for yours. Characters must be adults.</p>
         </div>
 
         <div class="editor-side">
+          <label class="field">
+            <span>Her voice</span>
+            <select name="voice" id="editor-voice"></select>
+          </label>
           <label class="field">
             <span>Appearance in photos</span>
             <textarea
@@ -293,7 +306,7 @@
 
           <section class="face" aria-labelledby="face-title">
             <h3 id="face-title">Reference face</h3>
-            <p class="small muted">Saved now; used to keep her face consistent in photos in a later update.</p>
+            <p id="face-usage" class="small muted">Her avatar, and the face kept in her photos.</p>
             <div id="face-preview" class="face-preview"><span class="muted small">No face yet</span></div>
             <div class="face-actions">
               <button id="face-generate" class="secondary" type="button">Generate 4 faces</button>

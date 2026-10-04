@@ -10,6 +10,7 @@ import {
   type Session,
   type SessionListItem,
   type SessionMemoryState,
+  type NewMessageOptions,
   type SessionStore,
   type StoredMessage,
 } from './sessionStore.js';
@@ -35,6 +36,7 @@ interface MessageRow {
   role: 'user' | 'assistant';
   content: string;
   image_id: string | null;
+  kind: StoredMessage['kind'];
   created_at: string;
 }
 
@@ -44,6 +46,7 @@ const toMessage = (r: MessageRow): StoredMessage => ({
   role: r.role,
   content: r.content,
   imageId: r.image_id,
+  kind: r.kind,
   createdAt: r.created_at,
 });
 
@@ -64,7 +67,7 @@ export class SqliteSessionStore implements SessionStore {
       insertSession: db.prepare('INSERT INTO sessions (id, character_id, created_at, updated_at) VALUES (?, ?, ?, ?)'),
       getSession: db.prepare('SELECT * FROM sessions WHERE id = ?'),
       getMessages: db.prepare(
-        'SELECT seq, id, role, content, image_id, created_at FROM messages WHERE session_id = ? ORDER BY seq',
+        'SELECT seq, id, role, content, image_id, kind, created_at FROM messages WHERE session_id = ? ORDER BY seq',
       ),
       list: db.prepare(`
         SELECT s.id, s.character_id, s.title, s.created_at, s.updated_at,
@@ -74,12 +77,13 @@ export class SqliteSessionStore implements SessionStore {
       deleteSession: db.prepare('DELETE FROM sessions WHERE id = ?'),
       idsByCharacter: db.prepare('SELECT id FROM sessions WHERE character_id = ?'),
       insertMessage: db.prepare(
-        'INSERT INTO messages (id, session_id, role, content, image_id, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+        'INSERT INTO messages (id, session_id, role, content, image_id, kind, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
       ),
+      setImage: db.prepare('UPDATE messages SET image_id = ? WHERE id = ?'),
       touch: db.prepare('UPDATE sessions SET updated_at = ? WHERE id = ?'),
       setTitleIfEmpty: db.prepare('UPDATE sessions SET title = ? WHERE id = ? AND title IS NULL'),
       lastMessage: db.prepare(
-        'SELECT seq, id, role, content, image_id, created_at FROM messages WHERE session_id = ? ORDER BY seq DESC LIMIT 1',
+        'SELECT seq, id, role, content, image_id, kind, created_at FROM messages WHERE session_id = ? ORDER BY seq DESC LIMIT 1',
       ),
       deleteMessage: db.prepare('DELETE FROM messages WHERE seq = ?'),
       exists: db.prepare('SELECT 1 AS ok FROM sessions WHERE id = ?'),
@@ -137,15 +141,24 @@ export class SqliteSessionStore implements SessionStore {
     return Number(this.stmt.deleteSession!.run(id).changes) > 0;
   }
 
-  appendMessage(sessionId: string, role: StoredMessage['role'], content: string, imageId?: string): StoredMessage {
+  appendMessage(
+    sessionId: string,
+    role: StoredMessage['role'],
+    content: string,
+    options: NewMessageOptions = {},
+  ): StoredMessage {
     return transaction(this.db, () => {
       this.requireExists(sessionId);
       const ts = this.now().toISOString();
-      const message = this.insertMessage(sessionId, role, content, ts, imageId ?? null);
+      const message = this.insertMessage(sessionId, role, content, ts, options);
       this.stmt.touch!.run(ts, sessionId);
       if (role === 'user') this.stmt.setTitleIfEmpty!.run(makeTitle(content), sessionId);
       return message;
     });
+  }
+
+  setMessageImage(messageId: string, imageId: string): void {
+    this.stmt.setImage!.run(imageId, messageId);
   }
 
   popLastIf(sessionId: string, role: StoredMessage['role']): StoredMessage | undefined {
@@ -177,11 +190,22 @@ export class SqliteSessionStore implements SessionStore {
     role: StoredMessage['role'],
     content: string,
     ts: string,
-    imageId: string | null = null,
+    {
+      imageId = null,
+      kind = null,
+    }: { imageId?: string | null | undefined; kind?: StoredMessage['kind'] | undefined } = {},
   ): StoredMessage {
     const id = randomUUID();
-    const result = this.stmt.insertMessage!.run(id, sessionId, role, content, imageId, ts);
-    return { seq: Number(result.lastInsertRowid), id, role, content, imageId, createdAt: ts };
+    const result = this.stmt.insertMessage!.run(id, sessionId, role, content, imageId ?? null, kind ?? null, ts);
+    return {
+      seq: Number(result.lastInsertRowid),
+      id,
+      role,
+      content,
+      imageId: imageId ?? null,
+      kind: kind ?? null,
+      createdAt: ts,
+    };
   }
 
   private requireExists(sessionId: string): void {

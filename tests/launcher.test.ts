@@ -2,9 +2,22 @@ import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { comfyCommand, isLocalUrl, isStale, waitUntilUp } from '../scripts/launcherLib.js';
+import { comfyCommand, comfyRoot, isLocalUrl, isStale, waitUntilUp } from '../scripts/launcherLib.js';
 
 const tmp = () => mkdtempSync(join(tmpdir(), 'girllm-launch-'));
+
+describe('comfyRoot', () => {
+  it('finds the application folder of portable and manual installs', () => {
+    const portable = tmp();
+    mkdirSync(join(portable, 'ComfyUI'));
+    writeFileSync(join(portable, 'ComfyUI', 'main.py'), '');
+    expect(comfyRoot(portable)).toBe(join(portable, 'ComfyUI'));
+    const manual = tmp();
+    writeFileSync(join(manual, 'main.py'), '');
+    expect(comfyRoot(manual)).toBe(manual);
+    expect(comfyRoot(tmp())).toBeUndefined();
+  });
+});
 
 describe('comfyCommand', () => {
   it('detects the Windows portable layout', () => {

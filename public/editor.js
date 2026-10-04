@@ -28,6 +28,8 @@ export class CharacterEditor {
    *   onDeleted: (id: string) => void,
    *   onFaceChanged: (id: string) => void,
    *   photosAvailable: () => boolean,
+   *   faceSupport: () => { ready: boolean, reason?: string } | undefined,
+   *   voices: () => Array<{ id: string, description: string, installed: boolean }>,
    * }} handlers
    */
   constructor(handlers) {
@@ -69,6 +71,12 @@ export class CharacterEditor {
     $('face-upload').addEventListener('click', () => void this.#askConsentThenPick());
     $('face-file').addEventListener('change', () => void this.#uploadFace());
     $('face-remove').addEventListener('click', () => void this.#removeFace());
+    $('lore-add').addEventListener('click', () => {
+      const item = this.#loreItem();
+      $('lore-list').append(item);
+      this.#updateLoreCount();
+      item.querySelector('.lore-keys').focus();
+    });
   }
 
   /** Open for a new character (no id) or an existing one. */
@@ -92,6 +100,9 @@ export class CharacterEditor {
     $('face-generate').disabled = !this.handlers.photosAvailable();
     $('face-generate').title = this.handlers.photosAvailable() ? '' : 'Photos are not available right now';
     this.#showFace(false);
+    this.#renderVoices();
+    this.#renderLore([]);
+    this.#renderFaceUsage();
     this.dialog.showModal();
 
     if (!id) {
@@ -104,6 +115,8 @@ export class CharacterEditor {
       for (const key of TEXT_FIELDS) this.form.elements.namedItem(key).value = data.card[key] ?? '';
       this.form.elements.namedItem('tags').value = data.card.tags.join(', ');
       this.form.querySelector(`input[name="style"][value="${data.card.style}"]`).checked = true;
+      this.#renderVoices(data.card.voice);
+      this.#renderLore(data.card.lorebook ?? []);
       this.#showFace(data.hasFace);
     } catch (err) {
       this.#status(err.message, true);
@@ -145,7 +158,124 @@ export class CharacterEditor {
       .map((t) => t.trim())
       .filter(Boolean)
       .slice(0, 20);
+    card.voice = value('voice');
+    card.lorebook = this.#collectLore();
     return card;
+  }
+
+  // ------------------------------------------------------------ voice --
+
+  /** "Her voice" list: the default (from the settings) + every voice, uninstalled ones disabled. */
+  #renderVoices(selected = '') {
+    const select = $('editor-voice');
+    const option = (value, label, disabled = false) => {
+      const o = document.createElement('option');
+      o.value = value;
+      o.textContent = label;
+      o.disabled = disabled;
+      return o;
+    };
+    const voices = this.handlers.voices();
+    select.replaceChildren(
+      option('', 'Default voice (from the settings)'),
+      ...voices.map((v) =>
+        option(
+          v.id,
+          v.installed ? v.description : `${v.description} (not installed)`,
+          !v.installed && v.id !== selected,
+        ),
+      ),
+    );
+    select.value = selected;
+    select.disabled = voices.length === 0;
+  }
+
+  // --------------------------------------------------------- lorebook --
+
+  /** One editable entry. Extra fields (order, case) ride along in data attributes. */
+  #loreItem(entry = { name: '', keys: [], content: '', enabled: true, constant: false }) {
+    const li = document.createElement('li');
+    li.className = 'lore-entry';
+    li.dataset.order = String(entry.insertion_order ?? 100);
+    li.dataset.caseSensitive = entry.case_sensitive ? '1' : '';
+    li.dataset.enabled = entry.enabled === false ? '' : '1';
+
+    const keys = document.createElement('input');
+    keys.className = 'lore-keys';
+    keys.maxLength = 1000;
+    keys.placeholder = 'Keywords, comma separated (sister, Chloé, Lyon)';
+    keys.setAttribute('aria-label', 'Keywords');
+    keys.value = entry.keys.join(', ');
+
+    const content = document.createElement('textarea');
+    content.className = 'lore-content';
+    content.rows = 3;
+    content.maxLength = 5000;
+    content.placeholder = "{{char}}'s older sister Chloé is a nurse in Lyon; they call every Sunday.";
+    content.setAttribute('aria-label', 'What she knows');
+    content.value = entry.content;
+
+    const constant = document.createElement('label');
+    constant.className = 'check small';
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.className = 'lore-constant';
+    box.checked = Boolean(entry.constant);
+    constant.append(box, document.createTextNode(' Always included'));
+
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'ghost danger small';
+    remove.textContent = 'Remove';
+    remove.addEventListener('click', () => {
+      li.remove();
+      this.#updateLoreCount();
+    });
+
+    const row = document.createElement('div');
+    row.className = 'lore-row';
+    row.append(constant, remove);
+    li.append(keys, content, row);
+    if (entry.name) li.dataset.name = entry.name;
+    return li;
+  }
+
+  #renderLore(entries) {
+    $('lore-list').replaceChildren(...entries.map((e) => this.#loreItem(e)));
+    $('lore-section').open = entries.length > 0;
+    this.#updateLoreCount();
+  }
+
+  #updateLoreCount() {
+    const n = $('lore-list').children.length;
+    $('lore-count').textContent = n ? `(${n})` : '';
+  }
+
+  #collectLore() {
+    return [...$('lore-list').children]
+      .map((li) => ({
+        name: li.dataset.name ?? '',
+        keys: li
+          .querySelector('.lore-keys')
+          .value.split(',')
+          .map((k) => k.trim())
+          .filter(Boolean)
+          .slice(0, 30),
+        content: li.querySelector('.lore-content').value.trim(),
+        enabled: li.dataset.enabled === '1',
+        constant: li.querySelector('.lore-constant').checked,
+        case_sensitive: li.dataset.caseSensitive === '1',
+        insertion_order: Number(li.dataset.order) || 100,
+      }))
+      .filter((e) => e.content); // an empty entry is just ignored
+  }
+
+  /** Under the face: is it used in her photos, and if not, why. */
+  #renderFaceUsage() {
+    const support = this.handlers.faceSupport();
+    $('face-usage').textContent = support?.ready
+      ? 'Her avatar, and the face kept in every photo she sends.'
+      : `Her avatar. To keep this face in her photos: ${support?.reason ?? 'photos are not available right now'}.`;
   }
 
   /** Create or update; returns the character's summary. */

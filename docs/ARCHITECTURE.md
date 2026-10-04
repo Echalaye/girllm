@@ -123,7 +123,7 @@ logged, never shown to the user.
 If the embedding backend is down, memories are stored without a vector and retrieval falls back to recency. The
 chat keeps working, with a warning logged at most once a minute.
 
-## Database schema (v3)
+## Database schema (v4)
 
 | Table                    | Key columns                                                                                                                                                                                     |
 | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -131,6 +131,7 @@ chat keeps working, with a warning logged at most once a minute.
 | `messages`               | `seq` (autoincrement, used as a cursor), `id` (UUID, public), `session_id` → cascade delete, `role`, `content`                                                                                  |
 | `images` (v2)            | `id`, `session_id` → cascade delete, `file_name`, `scene` (fed back to the LLM), `prompt`, `seed`                                                                                               |
 | `messages.image_id` (v2) | Links a photo message to its image (set NULL if the image row is gone)                                                                                                                          |
+| `messages.kind` (v4)     | `NULL` = a reply; `opening` / `nudge` = a message she wrote first (prevents two nudges in a row; "rewrite" keeps the kind)                                                                      |
 | `settings` (v3)          | `key`, `value` (JSON), `updated_at`: only the values changed from the app; absent = `.env` default                                                                                              |
 | `memories`               | `id`, `character_id`, `category` (`user`/`character`/`relationship`/`event`), `content`, `embedding` (float32 BLOB, L2-normalised), `embedding_model`, `source_session_id` → set NULL on delete |
 
@@ -139,11 +140,14 @@ incompatible spaces. Old memories then rank by recency until they are re-learned
 
 ## SSE protocol (server → browser)
 
-| Event   | Data                                                                                                              |
-| ------- | ----------------------------------------------------------------------------------------------------------------- |
-| `token` | `{ "text": string }`                                                                                              |
-| `done`  | `{ "messageId": string \| null, "aborted": boolean, "estimatedPromptTokens": number, "droppedMessages": number }` |
-| `error` | `{ "message": string }`                                                                                           |
+| Event         | Data                                                                                                              |
+| ------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `token`       | `{ "text": string }`                                                                                              |
+| `done`        | `{ "messageId": string \| null, "aborted": boolean, "estimatedPromptTokens": number, "droppedMessages": number }` |
+| `error`       | `{ "message": string }`                                                                                           |
+| `photo_start` | `{}` — she is sending a photo with the message just completed (after `done`)                                      |
+| `photo`       | `{ "messageId": string, "imageId": string }` — the photo is attached to that message                              |
+| `photo_error` | `{ "message": string }` — the text stays, only the photo failed or was refused                                    |
 
 ## HTTP API
 
@@ -261,3 +265,24 @@ this rule in every configuration.
 - **A message cursor (`seq`) instead of flags on each message**: "what's new since X" is one indexed range query.
 - **Fastify, no LLM SDK, estimated tokens, separate connect and generation timeouts**: unchanged from step 1.
   The OpenAI streaming protocol is around 60 lines with `fetch`, and token estimates are deliberately pessimistic.
+
+## Step 4d flows
+
+**She writes first.** `POST /initiate` → `ChatService.canInitiate` (opening: empty chat; nudge: silence ≥
+`proactiveAfterMinutes`, last message not already a nudge) → the prompt gets a _stage direction_ as the final user
+turn ("Etienne hasn't written for 3 hours…"), which is never stored → her message is saved with `kind`. The page
+asks on chat open and once a minute; the server is the only judge.
+
+**Photos she sends.** When allowed (frequency cooldown, or the user's message asks for a photo), a reminder tells
+the model it may end with `[photo: …]`. `PhotoTagFilter` hides the tag from the token stream (holding back only a
+possible tag prefix) → the text is stored, `done` is sent → `ImageService.attachPhoto` (safety, idea, GPU phase) →
+`setMessageImage` → `photo` event. A tag emitted when not allowed is hidden and ignored.
+
+**Reference face.** `ImageService.faceReference`: weight > 0 + a face in `FaceStore` + `ComfyClient.faceSupport()`
+(nodes present with the expected inputs, both model files listed; cached 1 min) → upload to ComfyUI's input folder
+under a content-hash name (once per process) → workflow nodes 12–15 (`LoadImage`, `IPAdapterModelLoader`,
+`CLIPVisionLoader`, `IPAdapterAdvanced`); both samplers use the patched model. Any failure → photo without the face,
+logged.
+
+**Lorebook.** `selectLore(character_book, recent messages, 15% of context)` → `[World info]` block placed right after
+the character definition.

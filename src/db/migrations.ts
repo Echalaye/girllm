@@ -74,4 +74,11 @@ export const MIGRATIONS: readonly string[] = [
     updated_at TEXT NOT NULL
   );
   `,
+
+  // v4 — messages she wrote on her own ("she writes first")
+  `
+  -- NULL = a normal reply; 'opening' = first message she generated for a chat
+  -- without a fixed greeting; 'nudge' = she wrote after a silence.
+  ALTER TABLE messages ADD COLUMN kind TEXT CHECK (kind IN ('opening', 'nudge'));
+  `,
 ];

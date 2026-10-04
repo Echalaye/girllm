@@ -40,6 +40,15 @@ const GROUPS = [
       { key: 'topP', label: 'Top-p', type: 'range', min: 0.05, max: 1, step: 0.01 },
       { key: 'repeatPenalty', label: 'Repetition penalty', type: 'range', min: 0.8, max: 1.5, step: 0.01 },
       { key: 'maxReplyTokens', label: 'Longest reply (tokens)', type: 'number', min: 16, max: 2048, step: 1 },
+      {
+        key: 'proactiveAfterMinutes',
+        label: 'She writes first after (minutes of silence)',
+        type: 'number',
+        min: 0,
+        max: 10080,
+        step: 5,
+        hint: 'When you are away or quiet that long, she sends a message on her own (once). 0: never.',
+      },
     ],
   },
   {
@@ -72,6 +81,26 @@ const GROUPS = [
   {
     title: 'Photos',
     fields: [
+      {
+        key: 'photoFrequency',
+        label: 'Photos she sends on her own',
+        type: 'select',
+        options: () => [
+          ['off', 'Never (only when you press the camera)'],
+          ['rare', 'Sometimes'],
+          ['often', 'Often'],
+        ],
+        hint: 'When you ask her for a photo in a message, she can always send one.',
+      },
+      {
+        key: 'imageFaceWeight',
+        label: 'Keep her reference face',
+        type: 'range',
+        min: 0,
+        max: 1,
+        step: 0.05,
+        hint: '0 turns it off. 0.6–0.8 keeps her face while leaving the scene free. Needs: npm run setup:images',
+      },
       {
         key: 'imageCheckpoint',
         label: 'Image model',

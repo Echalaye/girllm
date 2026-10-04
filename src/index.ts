@@ -97,6 +97,9 @@ async function main(): Promise<void> {
       }))
     : undefined;
 
+  // Reference faces: avatars in the app, and IP-Adapter input for photos.
+  const faces = new FaceStore(config.facesDir);
+
   const { images: img } = config;
   const images = img.enabled
     ? new ImageService(
@@ -124,9 +127,11 @@ async function main(): Promise<void> {
               style: s.imageStyle,
               negative: s.imageNegative,
               hires: { scale: s.imageHiresScale, denoise: s.imageHiresDenoise, steps: s.imageHiresSteps },
+              faceWeight: s.imageFaceWeight,
             },
           };
         },
+        faces,
       )
     : undefined;
 
@@ -144,6 +149,8 @@ async function main(): Promise<void> {
         minP: s.minP,
         repeatPenalty: s.repeatPenalty,
         replyLanguage: language(),
+        photoFrequency: s.photoFrequency,
+        proactiveAfterMinutes: s.proactiveAfterMinutes,
       };
     },
     memory,
@@ -152,7 +159,6 @@ async function main(): Promise<void> {
 
   // Character editor: deleting a character cascades to its chats, photos,
   // memories and reference face.
-  const faces = new FaceStore(config.facesDir);
   const characterService = new CharacterService(characters, chat, sessions, memoryStore, faces);
 
   const { voice: v } = config;
@@ -230,8 +236,10 @@ async function main(): Promise<void> {
 
   if (images) {
     const st = await images.status();
-    if (st.available) app.log.info(`Photos: on (ComfyUI ${img.comfyUrl}, checkpoint ${st.checkpoint})`);
-    else app.log.warn(`Photos: unavailable for now — ${st.reason}`);
+    if (st.available) {
+      app.log.info(`Photos: on (ComfyUI ${img.comfyUrl}, checkpoint ${st.checkpoint})`);
+      app.log.info(st.face?.ready ? 'Reference faces: on (IP-Adapter)' : `Reference faces: off — ${st.face?.reason}`);
+    } else app.log.warn(`Photos: unavailable for now — ${st.reason}`);
     if (config.llm.provider !== 'ollama') {
       app.log.warn('Photos with LLM_PROVIDER=openai: the LLM cannot be unloaded automatically, VRAM may run out.');
     }

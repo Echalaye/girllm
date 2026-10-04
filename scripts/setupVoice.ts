@@ -9,13 +9,11 @@
  * Security: only the pinned URLs of src/voice/catalog.ts are downloaded,
  * and each archive's SHA-256 is verified BEFORE it is extracted.
  */
-import { createHash } from 'node:crypto';
-import { createWriteStream, existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { rename, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { Readable, Transform } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
 import { spawn } from 'node:child_process';
+import { download } from './downloadLib.js';
 import { loadConfig } from '../src/config.js';
 import { STT_MODELS, TTS_VOICES, type ModelArchive } from '../src/voice/catalog.js';
 
@@ -28,41 +26,6 @@ function printList(): void {
   console.log('Voices (TTS_VOICE):');
   for (const [id, v] of Object.entries(TTS_VOICES))
     console.log(`  ${id.padEnd(15)} ${String(v.sizeMb).padStart(4)} MB  ${v.description}`);
-}
-
-/** Download `url` to `dest`, hashing on the fly, with a progress line. */
-async function download(url: string, dest: string, expectedSha256: string): Promise<void> {
-  const res = await fetch(url, { redirect: 'follow' });
-  if (!res.ok || !res.body) throw new Error(`Download failed: HTTP ${res.status} for ${url}`);
-
-  const total = Number(res.headers.get('content-length') ?? 0);
-  const hash = createHash('sha256');
-  let received = 0;
-  let lastPrint = 0;
-  const meter = new Transform({
-    transform(chunk: Buffer, _enc, cb) {
-      hash.update(chunk);
-      received += chunk.length;
-      const now = Date.now();
-      if (now - lastPrint > 500) {
-        lastPrint = now;
-        const pct = total ? ` ${((received / total) * 100).toFixed(0)}%` : '';
-        process.stdout.write(`\r    ${(received / 1e6).toFixed(0)} MB${pct}   `);
-      }
-      cb(null, chunk);
-    },
-  });
-
-  await pipeline(Readable.fromWeb(res.body), meter, createWriteStream(dest));
-  process.stdout.write('\n');
-
-  const actual = hash.digest('hex');
-  if (actual !== expectedSha256) {
-    await rm(dest, { force: true });
-    throw new Error(
-      `Checksum mismatch for ${url}\n  expected ${expectedSha256}\n  got      ${actual}\nNothing was extracted.`,
-    );
-  }
 }
 
 /** Extract a .tar.bz2 with the system tar (built into Windows 10+, macOS, Linux). */

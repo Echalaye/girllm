@@ -154,6 +154,7 @@ describe('time awareness', () => {
       role,
       content: 'x',
       imageId: null,
+      kind: null,
       createdAt,
     });
     expect(
