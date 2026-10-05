@@ -1,13 +1,16 @@
 /**
- * Installs what ComfyUI needs to keep each character's face consistent
- * (IP-Adapter Plus Face, step 4d):
- *   1. the ComfyUI_IPAdapter_plus custom nodes, cloned at a pinned commit;
- *   2. the CLIP-ViT-H vision model (~2.5 GB) and the SDXL face IP-Adapter
- *      (~850 MB), each verified against a pinned SHA-256 before it is moved
- *      into ComfyUI/models.
+ * Installs the image models girllm uses into ComfyUI:
+ *   1. consistent faces (IP-Adapter Plus Face, step 4d): the
+ *      ComfyUI_IPAdapter_plus custom nodes at a pinned commit, the CLIP-ViT-H
+ *      vision model (~2.5 GB) and the SDXL face IP-Adapter (~850 MB);
+ *   2. with --anime (step 5): Animagine XL 4.0 Opt (~6.9 GB), the model used
+ *      for anime characters.
+ * Every file is verified against a pinned SHA-256 before it is moved into
+ * ComfyUI/models.
  *
  *   npm run setup:images                      -> uses COMFYUI_DIR from .env
- *   npm run setup:images -- "D:\ComfyUI_windows_portable"
+ *   npm run setup:images -- --anime           -> also the anime model
+ *   npm run setup:images -- "D:\ComfyUI_windows_portable" --anime
  *
  * Nothing already installed is modified. Restart ComfyUI afterwards.
  */
@@ -16,7 +19,8 @@ import { existsSync, mkdirSync, renameSync, rmSync } from 'node:fs';
 import { rename } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { loadConfig } from '../src/config.js';
-import { IPADAPTER_MODELS, IPADAPTER_NODES } from '../src/images/ipAdapter.js';
+import { ANIME_MODEL } from '../src/images/artStyle.js';
+import { IPADAPTER_MODELS, IPADAPTER_NODES, type ComfyModelFile } from '../src/images/ipAdapter.js';
 import { download } from './downloadLib.js';
 import { comfyRoot } from './launcherLib.js';
 
@@ -62,8 +66,8 @@ function installNodes(root: string): void {
   console.log('✓ IP-Adapter nodes installed');
 }
 
-async function installModels(root: string): Promise<void> {
-  for (const m of IPADAPTER_MODELS) {
+async function installModels(root: string, models: readonly ComfyModelFile[]): Promise<void> {
+  for (const m of models) {
     const dir = join(root, 'models', m.folder);
     const dest = join(dir, m.file);
     if (existsSync(dest)) {
@@ -91,10 +95,13 @@ async function main(): Promise<void> {
   if (!root) throw new Error(`"${dir}" doesn't look like a ComfyUI install (no main.py found).`);
   console.log(`ComfyUI: ${root}\n`);
 
+  const anime = process.argv.includes('--anime');
   installNodes(root);
-  await installModels(root);
+  await installModels(root, anime ? [...IPADAPTER_MODELS, ANIME_MODEL] : IPADAPTER_MODELS);
   console.log('\nDone. Restart ComfyUI (or start.bat) so it loads the IP-Adapter nodes.');
   console.log('Then give your characters a reference face in the editor: their photos will keep that face.');
+  if (anime) console.log(`Anime characters use ${ANIME_MODEL.file} (Settings → Anime characters).`);
+  else console.log('For anime characters, run: npm run setup:images -- --anime');
 }
 
 main().catch((err: unknown) => {

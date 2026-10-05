@@ -18,6 +18,7 @@ import { loadCardFile, parseCardObject, slugify } from './cardLoader.js';
 import {
   characterFromCard,
   readAppearance,
+  readPictureFields,
   readStyle,
   readVoice,
   toInput,
@@ -139,6 +140,7 @@ export class CharacterRepository {
   /** Validate and add a card file's content (import from SillyTavern, chub.ai…). */
   async import(card: CardFields): Promise<Character> {
     assertAdultCharacter({ ...card, appearance: readAppearance(card.extensions) });
+    const picture = readPictureFields(card.extensions);
     return this.save({
       name: card.name,
       description: card.description,
@@ -153,6 +155,9 @@ export class CharacterRepository {
       style: readStyle(card.extensions),
       appearance: readAppearance(card.extensions),
       voice: readVoice(card.extensions) ?? '',
+      artStyle: picture.artStyle,
+      gender: picture.gender,
+      background: picture.backgroundMode,
       // Imported lorebooks keep their entries (only the standard fields).
       lorebook: (card.character_book?.entries ?? [])
         .filter((e) => e.content.trim())
@@ -211,6 +216,9 @@ export class CharacterRepository {
     else delete girllm.appearance;
     if (input.voice) girllm.voice = input.voice;
     else delete girllm.voice;
+    girllm.artStyle = input.artStyle;
+    girllm.gender = input.gender;
+    girllm.background = input.background;
     extensions.girllm = girllm;
     // Keep the book's own settings (name, scan depth, budget…); entries come from the editor.
     const book = input.lorebook.length

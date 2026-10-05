@@ -6,6 +6,7 @@
  * fast with a readable error instead of misbehaving at runtime.
  */
 import { join } from 'node:path';
+import { ANIME_CHECKPOINT_FILE } from './images/artStyle.js';
 import { z } from 'zod';
 import { STT_MODEL_IDS, TTS_VOICE_IDS, type SttModelId, type TtsVoiceId } from './voice/catalog.js';
 
@@ -144,6 +145,47 @@ const ConfigSchema = z
     IMAGE_FACE_WEIGHT: z.coerce.number().min(0).max(1).default(0.7),
     // She sends photos on her own: off | rare (≥ 12 of her messages apart) | often (≥ 5 apart).
     PHOTO_FREQUENCY: z.enum(['off', 'rare', 'often']).default('rare'),
+    // --- Anime characters (step 5): their own image model and settings.
+    // Animagine XL 4.0 Opt (run: npm run setup:images -- --anime); empty = no anime photos.
+    ANIME_CHECKPOINT: z.preprocess(
+      blankAsUnset,
+      z
+        .string()
+        .max(255)
+        .regex(/^[\w .()/\\-]+$/, 'invalid file name')
+        .default(ANIME_CHECKPOINT_FILE),
+    ),
+    ANIME_STEPS: z.coerce.number().int().min(1).max(100).default(28),
+    ANIME_CFG: z.coerce.number().min(1).max(20).default(5),
+    ANIME_SAMPLER: z
+      .string()
+      .regex(/^[a-z0-9_]+$/)
+      .default('euler_ancestral'),
+    ANIME_SCHEDULER: z
+      .string()
+      .regex(/^[a-z0-9_]+$/)
+      .default('normal'),
+    // Quality tags, placed LAST in anime prompts (Animagine's documented order).
+    ANIME_STYLE: z.preprocess(
+      blankAsUnset,
+      z.string().max(500).default('masterpiece, high score, great score, absurdres'),
+    ),
+    ANIME_NEGATIVE_PROMPT: z.preprocess(
+      blankAsUnset,
+      z
+        .string()
+        .max(1000)
+        .default(
+          'lowres, bad anatomy, bad hands, text, error, missing finger, extra digits, fewer digits, cropped, ' +
+            'worst quality, low quality, low score, bad score, average score, signature, watermark, username, blurry',
+        ),
+    ),
+    // Animagine is sharp at base resolution: the detail pass is off by default.
+    ANIME_HIRES_SCALE: z.coerce.number().min(1).max(2).default(1),
+    // The face IP-Adapter is trained on photos: off by default for anime (try 0.3–0.5).
+    ANIME_FACE_WEIGHT: z.coerce.number().min(0).max(1).default(0),
+    // Her picture behind the chat: off | subtle (blurred, dimmed) | clear.
+    CHAT_BACKGROUND: z.enum(['off', 'subtle', 'clear']).default('subtle'),
     // She writes first after this many minutes of silence (0 = never).
     PROACTIVE_AFTER_MINUTES: z.coerce.number().int().min(0).max(10_080).default(60),
   })
@@ -153,6 +195,8 @@ const ConfigSchema = z
   });
 
 export const PHOTO_FREQUENCIES = ['off', 'rare', 'often'] as const;
+export const CHAT_BACKGROUNDS = ['off', 'subtle', 'clear'] as const;
+export type ChatBackground = (typeof CHAT_BACKGROUNDS)[number];
 export type PhotoFrequency = (typeof PHOTO_FREQUENCIES)[number];
 
 export type AppConfig = Readonly<{
@@ -181,6 +225,8 @@ export type AppConfig = Readonly<{
   databasePath: string;
   /** DATA_DIR/faces: the characters' reference faces. */
   facesDir: string;
+  /** DATA_DIR/backgrounds: the characters' chat backgrounds. */
+  backgroundsDir: string;
   memory: Readonly<{
     enabled: boolean;
     embeddingModel: string | undefined;
@@ -207,7 +253,20 @@ export type AppConfig = Readonly<{
     hires: Readonly<{ scale: number; denoise: number; steps: number }>;
     faceWeight: number;
     photoFrequency: PhotoFrequency;
+    /** Image profile for anime characters (same size and detail-pass strength as realistic). */
+    anime: Readonly<{
+      checkpoint: string | undefined;
+      steps: number;
+      cfg: number;
+      sampler: string;
+      scheduler: string;
+      style: string;
+      negative: string;
+      hiresScale: number;
+      faceWeight: number;
+    }>;
   }>;
+  chatBackground: ChatBackground;
   /** Minutes of silence before she writes first (0 = never). */
   proactiveAfterMinutes: number;
   voice: Readonly<{
@@ -258,6 +317,7 @@ export function parseConfig(env: NodeJS.ProcessEnv): AppConfig {
     replyLanguage: c.REPLY_LANGUAGE,
     databasePath: join(c.DATA_DIR, 'girllm.db'),
     facesDir: join(c.DATA_DIR, 'faces'),
+    backgroundsDir: join(c.DATA_DIR, 'backgrounds'),
     memory: Object.freeze({
       enabled: c.MEMORY_ENABLED,
       embeddingModel: c.EMBEDDING_MODEL,
@@ -282,7 +342,19 @@ export function parseConfig(env: NodeJS.ProcessEnv): AppConfig {
       hires: Object.freeze({ scale: c.IMAGE_HIRES_SCALE, denoise: c.IMAGE_HIRES_DENOISE, steps: c.IMAGE_HIRES_STEPS }),
       faceWeight: c.IMAGE_FACE_WEIGHT,
       photoFrequency: c.PHOTO_FREQUENCY,
+      anime: Object.freeze({
+        checkpoint: c.ANIME_CHECKPOINT,
+        steps: c.ANIME_STEPS,
+        cfg: c.ANIME_CFG,
+        sampler: c.ANIME_SAMPLER,
+        scheduler: c.ANIME_SCHEDULER,
+        style: c.ANIME_STYLE.trim(),
+        negative: c.ANIME_NEGATIVE_PROMPT.trim(),
+        hiresScale: c.ANIME_HIRES_SCALE,
+        faceWeight: c.ANIME_FACE_WEIGHT,
+      }),
     }),
+    chatBackground: c.CHAT_BACKGROUND,
     proactiveAfterMinutes: c.PROACTIVE_AFTER_MINUTES,
     voice: Object.freeze({
       enabled: c.VOICE_ENABLED,

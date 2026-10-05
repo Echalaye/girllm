@@ -1,6 +1,8 @@
 /**
  * Character editor API: create / edit / delete / import / export cards, and
- * the reference face (upload with consent, or generated portraits).
+ * the character's pictures:
+ *   - face: reference portrait (generated candidates, or upload with consent);
+ *   - background: the scene shown behind the chat (generated candidates).
  */
 import { readFile } from 'node:fs/promises';
 import type { FastifyInstance } from 'fastify';
@@ -17,6 +19,8 @@ export interface CharacterRoutesDeps {
   characters: CharacterRepository;
   characterService: CharacterService;
   faces: FaceStore;
+  /** Chat backgrounds (same store type as faces, another folder). */
+  backgrounds?: FaceStore | undefined;
   images?: ImageService | undefined;
 }
 
@@ -32,8 +36,9 @@ export const CONSENT_VALUE = 'adult-and-consenting';
 const MAX_CARD_BYTES = 20 * 1024 * 1024;
 /** Face uploads: the sanitizer refuses anything above 10 MB anyway. */
 const MAX_FACE_BYTES = 10 * 1024 * 1024;
-/** Portrait candidates generated per request, and how long they are kept. */
+/** Candidates generated per request (portraits are cheaper than wide scenes), and how long they are kept. */
 const PORTRAIT_COUNT = 4;
+const BACKGROUND_COUNT = 2;
 const CANDIDATE_TTL_MS = 60 * 60 * 1000;
 
 const MIME = { png: 'image/png', jpeg: 'image/jpeg' } as const;
@@ -60,7 +65,11 @@ export function registerCharacterRoutes(app: FastifyInstance, deps: CharacterRou
     creatorNotes: c.creator_notes,
     tags: c.tags,
     style: c.style,
+    artStyle: c.artStyle,
+    gender: c.gender,
+    background: c.backgroundMode,
     hasFace: faces.get(c.id) !== undefined,
+    hasBackground: deps.backgrounds?.get(c.id) !== undefined,
   });
 
   // ---- Cards ---------------------------------------------------------------
@@ -127,18 +136,86 @@ export function registerCharacterRoutes(app: FastifyInstance, deps: CharacterRou
       .send(JSON.stringify(card, null, 2));
   });
 
-  // ---- Reference face ------------------------------------------------------
+  // ---- Pictures: reference face and chat background -------------------------
 
-  app.get('/api/characters/:id/face', async (request, reply) => {
-    const { id } = IdParams.parse(request.params);
-    requireCharacter(id);
-    const face = faces.get(id);
-    if (!face) throw new NotFoundHttpError('No face for this character');
-    return reply
-      .header('Content-Type', MIME[face.type])
-      .header('Cache-Control', 'no-cache')
-      .send(await readFile(face.path));
-  });
+  /**
+   * GET / DELETE the picture, POST …/candidates to generate some (long
+   * request, cancelled if the client goes away), GET a candidate's preview,
+   * POST a candidate to make it the picture.
+   */
+  const registerPicture = (
+    kind: 'face' | 'background',
+    store: FaceStore,
+    generate: (images: ImageService, c: Character, signal: AbortSignal) => Promise<Buffer[]>,
+  ) => {
+    const base = `/api/characters/:id/${kind}`;
+
+    app.get(base, async (request, reply) => {
+      const { id } = IdParams.parse(request.params);
+      requireCharacter(id);
+      const file = store.get(id);
+      if (!file) throw new NotFoundHttpError(`No ${kind} for this character`);
+      return reply
+        .header('Content-Type', MIME[file.type])
+        .header('Cache-Control', 'no-cache')
+        .send(await readFile(file.path));
+    });
+
+    app.delete(base, async (request, reply) => {
+      const { id } = IdParams.parse(request.params);
+      requireCharacter(id);
+      await store.remove(id);
+      return reply.code(204).send();
+    });
+
+    app.post(`${base}/candidates`, async (request, reply) => {
+      const { id } = IdParams.parse(request.params);
+      const c = requireCharacter(id);
+      if (!deps.images) throw new ImageUnavailableError('Photos are disabled (IMAGES_ENABLED=false)');
+      await store.cleanupCandidates(CANDIDATE_TTL_MS);
+      // Closing the editor (or the tab) cancels the generation.
+      const controller = new AbortController();
+      const onClose = () => {
+        if (!reply.raw.writableEnded) controller.abort(new Error('client disconnected'));
+      };
+      reply.raw.on('close', onClose);
+      try {
+        const pngs = await generate(deps.images, c, controller.signal);
+        const candidates = await Promise.all(pngs.map((png) => store.addCandidate(png)));
+        return { candidates };
+      } finally {
+        reply.raw.off('close', onClose);
+      }
+    });
+
+    app.get(`${base}/candidates/:candidateId`, async (request, reply) => {
+      const { candidateId } = CandidateParams.parse(request.params);
+      const path = store.candidatePath(candidateId);
+      if (!path) throw new NotFoundHttpError('Candidate expired');
+      return reply.header('Content-Type', 'image/png').send(await readFile(path));
+    });
+
+    /** Pick a generated candidate (no consent needed: it's AI-generated). */
+    app.post(`${base}/candidates/:candidateId`, async (request, reply) => {
+      const { id, candidateId } = CandidateParams.parse(request.params);
+      requireCharacter(id);
+      if (!(await store.promote(id, candidateId))) throw new NotFoundHttpError('Candidate expired');
+      return reply.code(204).send();
+    });
+  };
+
+  registerPicture('face', faces, (images, c, signal) =>
+    images.generatePortraits(
+      { appearance: c.appearance, artStyle: c.artStyle, gender: c.gender },
+      PORTRAIT_COUNT,
+      signal,
+    ),
+  );
+  if (deps.backgrounds) {
+    registerPicture('background', deps.backgrounds, (images, c, signal) =>
+      images.generateBackgrounds(c.id, BACKGROUND_COUNT, signal),
+    );
+  }
 
   /**
    * Upload a face image. Requires the consent header: the user attests the
@@ -158,49 +235,6 @@ export function registerCharacterRoutes(app: FastifyInstance, deps: CharacterRou
       throw badRequest((err as Error).message);
     }
     await faces.save(id, image);
-    return reply.code(204).send();
-  });
-
-  app.delete('/api/characters/:id/face', async (request, reply) => {
-    const { id } = IdParams.parse(request.params);
-    requireCharacter(id);
-    await faces.remove(id);
-    return reply.code(204).send();
-  });
-
-  /** Generate portrait candidates from the (saved) appearance. Long request. */
-  app.post('/api/characters/:id/face/candidates', async (request, reply) => {
-    const { id } = IdParams.parse(request.params);
-    const c = requireCharacter(id);
-    if (!deps.images) throw new ImageUnavailableError('Photos are disabled (IMAGES_ENABLED=false)');
-    await faces.cleanupCandidates(CANDIDATE_TTL_MS);
-    // Closing the editor (or the tab) cancels the generation.
-    const controller = new AbortController();
-    const onClose = () => {
-      if (!reply.raw.writableEnded) controller.abort(new Error('client disconnected'));
-    };
-    reply.raw.on('close', onClose);
-    try {
-      const pngs = await deps.images.generatePortraits(c.appearance, PORTRAIT_COUNT, controller.signal);
-      const candidates = await Promise.all(pngs.map((png) => faces.addCandidate(png)));
-      return { candidates };
-    } finally {
-      reply.raw.off('close', onClose);
-    }
-  });
-
-  app.get('/api/characters/:id/face/candidates/:candidateId', async (request, reply) => {
-    const { candidateId } = CandidateParams.parse(request.params);
-    const path = faces.candidatePath(candidateId);
-    if (!path) throw new NotFoundHttpError('Candidate expired');
-    return reply.header('Content-Type', 'image/png').send(await readFile(path));
-  });
-
-  /** Pick a generated candidate as the face (no consent needed: it's AI-generated). */
-  app.post('/api/characters/:id/face/candidates/:candidateId', async (request, reply) => {
-    const { id, candidateId } = CandidateParams.parse(request.params);
-    requireCharacter(id);
-    if (!(await faces.promote(id, candidateId))) throw new NotFoundHttpError('Candidate expired');
     return reply.code(204).send();
   });
 }

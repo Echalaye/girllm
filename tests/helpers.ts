@@ -26,6 +26,9 @@ export function makeCharacter(overrides: Partial<Character> = {}): Character {
     appearance: '',
     style: 'roleplay',
     voice: undefined,
+    artStyle: 'realistic',
+    gender: 'female',
+    backgroundMode: 'scene',
     ...overrides,
   };
 }

@@ -59,6 +59,8 @@
 
       <!-- ============ Conversation ============ -->
       <section class="conversation" aria-labelledby="her-name">
+        <!-- Her picture behind the chat (decorative): see updateBackground() in app.js. -->
+        <div id="chat-bg" class="chat-bg" aria-hidden="true"></div>
         <header class="presence">
           <button id="open-sidebar" class="icon-button only-narrow" type="button" aria-label="Open the menu">
             <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16" /></svg>
@@ -218,6 +220,22 @@
               <label><input type="radio" name="style" value="roleplay" /> Roleplay story</label>
             </div>
           </fieldset>
+          <div class="field-row">
+            <fieldset class="field">
+              <legend>Drawn as</legend>
+              <div class="segmented">
+                <label><input type="radio" name="artStyle" value="realistic" checked /> Realistic photos</label>
+                <label><input type="radio" name="artStyle" value="anime" /> Anime</label>
+              </div>
+            </fieldset>
+            <fieldset class="field">
+              <legend>In pictures</legend>
+              <div class="segmented">
+                <label><input type="radio" name="gender" value="female" checked /> Woman</label>
+                <label><input type="radio" name="gender" value="male" /> Man</label>
+              </div>
+            </fieldset>
+          </div>
           <label class="field">
             <span>Who she is</span>
             <textarea
@@ -295,13 +313,15 @@
             <select name="voice" id="editor-voice"></select>
           </label>
           <label class="field">
-            <span>Appearance in photos</span>
+            <span>Appearance in pictures</span>
             <textarea
               name="appearance"
               rows="4"
               maxlength="500"
+              aria-describedby="appearance-hint"
               placeholder="woman, 26 years old, shoulder-length auburn hair, green eyes, freckles"
             ></textarea>
+            <span id="appearance-hint" class="hint"></span>
           </label>
 
           <section class="face" aria-labelledby="face-title">
@@ -316,6 +336,25 @@
             </div>
             <div id="face-candidates" class="face-candidates" hidden></div>
             <p id="face-status" class="small muted" role="status" aria-live="polite"></p>
+          </section>
+
+          <section class="face" aria-labelledby="bg-title">
+            <h3 id="bg-title">Chat background</h3>
+            <label class="field">
+              <span>Behind the chat</span>
+              <select name="background">
+                <option value="scene">Her scene (below)</option>
+                <option value="latest">Her latest photo in the chat</option>
+              </select>
+            </label>
+            <p class="small muted">Without a scene or a photo, her face is used.</p>
+            <div id="bg-preview" class="bg-preview"><span class="muted small">No scene yet</span></div>
+            <div class="face-actions">
+              <button id="bg-generate" class="secondary" type="button">Generate 2 scenes</button>
+              <button id="bg-remove" class="ghost danger" type="button" hidden>Remove</button>
+            </div>
+            <div id="bg-candidates" class="face-candidates bg-candidates" hidden></div>
+            <p id="bg-status" class="small muted" role="status" aria-live="polite"></p>
           </section>
         </div>
       </form>

@@ -10,6 +10,7 @@
  */
 import { z } from 'zod';
 import { TTS_VOICE_IDS, type TtsVoiceId } from '../voice/catalog.js';
+import { ART_STYLES, GENDERS, type ArtStyle, type Gender } from '../images/artStyle.js';
 
 /** Generous but bounded: protects memory and the prompt token budget. */
 const text = (max: number) => z.string().max(max).default('');
@@ -96,6 +97,12 @@ export interface Character extends CardFields {
   style: CharacterStyle;
   /** Her own voice (`extensions.girllm.voice`); undefined = the voice from the settings. */
   voice: TtsVoiceId | undefined;
+  /** How she is drawn (`extensions.girllm.artStyle`): realistic photos (default) or anime. */
+  artStyle: ArtStyle;
+  /** For pictures (`extensions.girllm.gender`): 1girl/woman (default) or 1boy/man. */
+  gender: Gender;
+  /** Chat background (`extensions.girllm.background`): her generated scene, or her latest photo. */
+  backgroundMode: BackgroundMode;
   /** Where the card was loaded from — for logs only, never sent to clients. */
   sourceFile: string;
 }
@@ -122,6 +129,16 @@ export function readStyle(extensions: Record<string, unknown>): CharacterStyle {
   return (CHARACTER_STYLES as readonly unknown[]).includes(style) ? (style as CharacterStyle) : 'roleplay';
 }
 
+export const BACKGROUND_MODES = ['scene', 'latest'] as const;
+export type BackgroundMode = (typeof BACKGROUND_MODES)[number];
+
+/** Read a string field of `extensions.girllm` among allowed values, with a default. */
+function readEnum<T extends string>(extensions: Record<string, unknown>, key: string, allowed: readonly T[], fallback: T): T {
+  const girllm = extensions.girllm;
+  const value = girllm && typeof girllm === 'object' ? (girllm as Record<string, unknown>)[key] : undefined;
+  return (allowed as readonly unknown[]).includes(value) ? (value as T) : fallback;
+}
+
 /** Read `extensions.girllm.voice` (a known voice id, or undefined). */
 export function readVoice(extensions: Record<string, unknown>): TtsVoiceId | undefined {
   const girllm = extensions.girllm;
@@ -138,6 +155,18 @@ export function characterFromCard(fields: CardFields, id: string, sourceFile: st
     appearance: readAppearance(fields.extensions),
     style: readStyle(fields.extensions),
     voice: readVoice(fields.extensions),
+    ...readPictureFields(fields.extensions),
+  };
+}
+
+/** girllm's picture settings of a card: art style, gender, chat background (validated, with defaults). */
+export function readPictureFields(
+  extensions: Record<string, unknown>,
+): Pick<Character, 'artStyle' | 'gender' | 'backgroundMode'> {
+  return {
+    artStyle: readEnum(extensions, 'artStyle', ART_STYLES, 'realistic'),
+    gender: readEnum(extensions, 'gender', GENDERS, 'female'),
+    backgroundMode: readEnum(extensions, 'background', BACKGROUND_MODES, 'scene'),
   };
 }
 
@@ -183,6 +212,9 @@ export const CharacterInputSchema = z.object({
   appearance: z.string().trim().max(MAX_APPEARANCE_CHARS).default(''),
   /** Her own voice; '' = the voice from the settings. */
   voice: z.union([z.enum(TTS_VOICE_IDS), z.literal('')]).default(''),
+  artStyle: z.enum(ART_STYLES).default('realistic'),
+  gender: z.enum(GENDERS).default('female'),
+  background: z.enum(BACKGROUND_MODES).default('scene'),
   lorebook: z.array(LoreInputSchema).max(200).default([]),
 });
 export type CharacterInput = z.infer<typeof CharacterInputSchema>;
@@ -203,6 +235,9 @@ export function toInput(c: Character): CharacterInput {
     style: c.style,
     appearance: c.appearance,
     voice: c.voice ?? '',
+    artStyle: c.artStyle,
+    gender: c.gender,
+    background: c.backgroundMode,
     lorebook: (c.character_book?.entries ?? []).map((e) => ({
       name: e.name ?? '',
       keys: e.keys,

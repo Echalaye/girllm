@@ -286,3 +286,18 @@ logged.
 
 **Lorebook.** `selectLore(character_book, recent messages, 15% of context)` → `[World info]` block placed right after
 the character definition.
+
+## Step 5: art styles and backgrounds
+
+**Two image profiles.** `ImageServiceOptions.settings` (realistic) and `.anime`, each a full `ImageSettings`
+(checkpoint, sampler, tags, face weight). `ImageService.profile(character.artStyle)` picks one, or throws an
+`ImageUnavailableError` that says how to install the missing model. `artStyle.ts` builds the prompts:
+realistic = subject, photo style, appearance, scene; anime = `1girl|1boy, solo, adult, mature female|male`,
+appearance, scene, quality tags last (Animagine's documented order). The photo-idea prompt asks for Danbooru tags
+for anime characters. Negatives always include the youth terms; anime adds a few more.
+
+**Backgrounds.** A second `FaceStore` in `data/backgrounds`; the face and background routes are the same generic set
+(`registerPicture`). `generateBackgrounds` asks the LLM for a "wide picture of me in my usual place" from the card,
+then renders 1216×832 candidates with her reference face. The page picks the source (`latest` photo → scene → face)
+and the look (`chatBackground` setting) in `updateBackground()`; the layer is decorative (`aria-hidden`), blurred
+and veiled with the page colour so the text keeps its contrast in both themes.

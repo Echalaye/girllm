@@ -99,6 +99,7 @@ async function main(): Promise<void> {
 
   // Reference faces: avatars in the app, and IP-Adapter input for photos.
   const faces = new FaceStore(config.facesDir);
+  const backgrounds = new FaceStore(config.backgroundsDir);
 
   const { images: img } = config;
   const images = img.enabled
@@ -128,6 +129,20 @@ async function main(): Promise<void> {
               negative: s.imageNegative,
               hires: { scale: s.imageHiresScale, denoise: s.imageHiresDenoise, steps: s.imageHiresSteps },
               faceWeight: s.imageFaceWeight,
+            },
+            anime: {
+              checkpoint: s.animeCheckpoint || undefined,
+              width: img.width,
+              height: img.height,
+              steps: s.animeSteps,
+              cfg: s.animeCfg,
+              sampler: s.animeSampler,
+              scheduler: s.animeScheduler,
+              style: s.animeStyle,
+              negative: s.animeNegative,
+              // Same detail-pass strength/steps as realistic; only the scale differs.
+              hires: { scale: s.animeHiresScale, denoise: s.imageHiresDenoise, steps: s.imageHiresSteps },
+              faceWeight: s.animeFaceWeight,
             },
           };
         },
@@ -159,7 +174,7 @@ async function main(): Promise<void> {
 
   // Character editor: deleting a character cascades to its chats, photos,
   // memories and reference face.
-  const characterService = new CharacterService(characters, chat, sessions, memoryStore, faces);
+  const characterService = new CharacterService(characters, chat, sessions, memoryStore, faces, backgrounds);
 
   const { voice: v } = config;
   const voice: VoiceServices | undefined = v.enabled
@@ -189,6 +204,7 @@ async function main(): Promise<void> {
     images,
     characterService,
     faces,
+    backgrounds,
     settings,
     voiceModelsDir: v.modelsDir,
     allowedHosts,
@@ -240,6 +256,11 @@ async function main(): Promise<void> {
       app.log.info(`Photos: on (ComfyUI ${img.comfyUrl}, checkpoint ${st.checkpoint})`);
       app.log.info(st.face?.ready ? 'Reference faces: on (IP-Adapter)' : `Reference faces: off — ${st.face?.reason}`);
     } else app.log.warn(`Photos: unavailable for now — ${st.reason}`);
+    app.log.info(
+      st.anime.available
+        ? `Anime photos: on (checkpoint ${st.anime.checkpoint})`
+        : `Anime photos: off — ${st.anime.reason}`,
+    );
     if (config.llm.provider !== 'ollama') {
       app.log.warn('Photos with LLM_PROVIDER=openai: the LLM cannot be unloaded automatically, VRAM may run out.');
     }

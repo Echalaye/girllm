@@ -231,8 +231,8 @@ export class ChatService {
     const lastWasHers = last?.role === 'assistant';
     return (
       `(${user} hasn't written for ${gap}${lastWasHers ? ` and hasn't answered ${charName}'s last message` : ''}. ` +
-      `${charName} decides to text ${user} first: write that message, natural for her mood and the time of day. ` +
-      `Don't repeat her previous message.)`
+      `${charName} decides to text ${user} first: write that message, natural for ${charName}'s mood and the time of day. ` +
+      `Don't repeat the previous message.)`
     );
   }
 
@@ -333,7 +333,9 @@ export class ChatService {
    */
   private photoAllowed(session: Session): 'asked' | 'spontaneous' | undefined {
     const frequency = this.opts.photoFrequency ?? 'off';
-    if (frequency === 'off' || !this.images?.configured()) return undefined;
+    if (frequency === 'off') return undefined;
+    const character = this.characters.get(session.characterId);
+    if (!character || !this.images?.configured(character.artStyle)) return undefined;
     const last = session.messages.at(-1);
     if (last?.role === 'user' && asksForPhoto(last.content)) return 'asked';
     return messagesSinceLastPhoto(session.messages) >= PHOTO_COOLDOWN[frequency] ? 'spontaneous' : undefined;
@@ -374,6 +376,6 @@ const LORE_BUDGET_SHARE = 0.15;
 function photoReminder(mode: 'asked' | 'spontaneous'): string {
   const how = 'end the message with [photo: what the photo shows, in a few words]';
   return mode === 'asked'
-    ? `{{user}} is asking {{char}} for a photo. If {{char}} agrees, ${how}. She may also refuse, in character.`
-    : `{{char}} can send {{user}} a photo from her phone when it really fits the moment (not often): then ${how}.`;
+    ? `{{user}} is asking {{char}} for a photo. If {{char}} agrees, ${how}. {{char}} may also refuse, in character.`
+    : `{{char}} can send {{user}} a photo from {{char}}'s phone when it really fits the moment (not often): then ${how}.`;
 }

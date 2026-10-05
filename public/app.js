@@ -48,6 +48,8 @@ const els = {
   memoryContent: $('memory-content'),
   memoryList: $('memory-list'),
   themeToggle: $('theme-toggle'),
+  conversation: document.querySelector('.conversation'),
+  chatBg: $('chat-bg'),
 };
 
 const state = {
@@ -62,9 +64,12 @@ const state = {
   controller: null,
   /** Read replies aloud (persisted per browser). */
   speakReplies: false,
-  photosAvailable: false,
-  /** Reference faces in photos: { ready, reason } from /api/images/status. */
-  faceSupport: undefined,
+  /** /api/images/status: realistic availability at the top level, anime under `.anime`. */
+  imageStatus: null,
+  /** Her picture behind the chat: 'subtle' | 'clear' | 'off' (a setting). */
+  chatBackground: 'subtle',
+  /** Cache-buster for face/background URLs after they change. */
+  pictureBust: '',
   /** Voices for the character editor (from /api/voice). */
   voices: [],
   /** Running hands-free call, if any. */
@@ -284,6 +289,7 @@ function renderSession(session) {
   if (session.messages.length === 0) {
     els.messages.append(el('p', 'empty-chat', `Say hello to ${herName()}.`));
   }
+  updateBackground();
 }
 
 function setBusy(busy) {
@@ -351,6 +357,7 @@ async function streamInto(path, payload, { speak = state.speakReplies, quiet = f
         b.wrap.classList.remove('photo-pending');
         b.wrap.classList.add('photo-msg');
         b.wrap.prepend(photoElement(data.imageId));
+        updateBackground(); // "latest photo" backgrounds follow
         if (document.hidden) notifyUnread();
       } else if (event === 'photo_error') {
         bubble?.wrap.classList.remove('photo-pending');
@@ -431,6 +438,7 @@ function showSession(session, character) {
   paintFace(els.portrait, current());
   setPresence('');
   renderCharacters();
+  updatePhotoButton();
   renderSession(session);
   // She writes first: the opening of an empty chat, or after a long silence.
   setTimeout(() => {
@@ -607,6 +615,7 @@ async function sendPhoto() {
     bubble.wrap.remove();
     addMessage('assistant', message.content, { imageId: message.imageId });
     state.lastMessageAt = Date.now();
+    updateBackground();
     if (state.speakReplies) speaker.enqueue(message.content);
     setStatus('');
   } catch (err) {
@@ -628,13 +637,59 @@ async function sendPhoto() {
 /** Show the photo button unless photos are disabled in the config. */
 async function initPhotos() {
   const status = await api('/api/images/status').catch(() => null);
-  const disabled = !status || String(status.reason ?? '').startsWith('disabled');
-  state.photosAvailable = Boolean(status?.available);
-  state.faceSupport = status?.face;
-  els.photo.hidden = disabled;
-  els.photo.title = status?.available
+  state.imageStatus = status;
+  els.photo.hidden = !status || String(status.reason ?? '').startsWith('disabled');
+  updatePhotoButton();
+}
+
+/** Image availability for an art style: realistic at the top level, anime under `.anime`. */
+function styleStatus(artStyle = 'realistic') {
+  const status = state.imageStatus;
+  return artStyle === 'anime' ? status?.anime : status;
+}
+
+/** The 📷 button follows the current character's art style. */
+function updatePhotoButton() {
+  const st = styleStatus(current()?.artStyle);
+  els.photo.title = st?.available
     ? 'Ask for a photo (describe it in the box first, or leave it empty)'
-    : `Photos unavailable: ${status?.reason ?? 'unknown'}`;
+    : `Photos unavailable: ${st?.reason ?? 'unknown'}`;
+}
+
+// --------------------------------------------------- chat background --
+
+/**
+ * Her picture behind the chat (step 5). Source, per character:
+ *   "latest" → her latest photo in this chat, else her scene, else her face;
+ *   "scene"  → her generated scene, else her face.
+ * The look (subtle / clear / off) is a setting.
+ */
+function updateBackground() {
+  const c = current();
+  const layer = els.chatBg;
+  let url = '';
+  if (c && state.chatBackground !== 'off') {
+    const latest = c.background === 'latest' ? [...els.messages.querySelectorAll('img.photo')].at(-1) : null;
+    if (latest) url = latest.getAttribute('src');
+    else if (c.hasBackground) url = `/api/characters/${encodeURIComponent(c.id)}/background${state.pictureBust}`;
+    else if (c.hasFace) url = `/api/characters/${encodeURIComponent(c.id)}/face${state.pictureBust}`;
+  }
+  els.conversation.classList.toggle('has-bg', Boolean(url));
+  layer.dataset.look = state.chatBackground;
+  if (!url) {
+    layer.replaceChildren();
+    return;
+  }
+  // Only swap the image when the source changes (no flicker on re-renders).
+  if (layer.firstElementChild?.getAttribute('src') === url) return;
+  const img = el('img');
+  img.alt = '';
+  img.decoding = 'async';
+  img.src = url;
+  // Fade in once loaded; a missing file just leaves the plain background.
+  img.addEventListener('load', () => img.classList.add('loaded'), { once: true });
+  img.addEventListener('error', () => img.remove(), { once: true });
+  layer.replaceChildren(img);
 }
 
 // -------------------------------------------------------------- voice --
@@ -814,13 +869,15 @@ const settingsPanel = new SettingsPanel({
   onSaved: (values) => {
     state.userName = values.userName;
     state.proactiveAfterMinutes = values.proactiveAfterMinutes;
+    state.chatBackground = values.chatBackground;
+    updateBackground();
     void initPhotos(); // the image model may have changed
   },
 });
 
 const editor = new CharacterEditor({
-  photosAvailable: () => state.photosAvailable,
-  faceSupport: () => state.faceSupport,
+  photosAvailable: (artStyle) => Boolean(styleStatus(artStyle)?.available),
+  faceSupport: (artStyle) => styleStatus(artStyle)?.face,
   voices: () => state.voices,
   onSaved: (summary) => {
     report(
@@ -829,16 +886,21 @@ const editor = new CharacterEditor({
         if (summary.id === state.characterId) {
           els.herName.textContent = summary.name;
           paintFace(els.portrait, current(), `?v=${Date.now()}`);
+          updatePhotoButton();
+          updateBackground(); // the background mode may have changed
           void refreshSessionList();
         }
       })(),
     );
   },
-  onFaceChanged: (id) => {
+  onPictureChanged: (id) => {
     report(
       (async () => {
         await loadCharacters();
-        if (id === state.characterId) paintFace(els.portrait, current(), `?v=${Date.now()}`);
+        if (id !== state.characterId) return;
+        state.pictureBust = `?v=${Date.now()}`; // a new face/scene has the same URL
+        paintFace(els.portrait, current(), state.pictureBust);
+        updateBackground();
       })(),
     );
   },
@@ -940,6 +1002,7 @@ async function init() {
     const [config, health] = await Promise.all([api('/api/config'), api('/api/health').catch(() => null)]);
     state.userName = config.userName;
     state.proactiveAfterMinutes = config.proactiveAfterMinutes ?? 0;
+    state.chatBackground = config.chatBackground ?? 'subtle';
     setInterval(proactiveTick, 60_000);
     $('open-memory').hidden = !config.memoryEnabled;
     await Promise.all([loadCharacters(), initVoice(), initPhotos()]);

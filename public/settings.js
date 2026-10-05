@@ -103,7 +103,7 @@ const GROUPS = [
       },
       {
         key: 'imageCheckpoint',
-        label: 'Image model',
+        label: 'Image model (realistic characters)',
         type: 'select',
         options: (o, current) => [['', 'None (photos off)'], ...withCurrent(o.checkpoints, current).map((c) => [c, c])],
         hint: 'Checkpoints found in ComfyUI.',
@@ -125,6 +125,66 @@ const GROUPS = [
       },
       { key: 'imageHiresDenoise', label: 'Detail pass strength', type: 'range', min: 0.1, max: 0.7, step: 0.01 },
       { key: 'imageHiresSteps', label: 'Detail pass steps', type: 'number', min: 4, max: 60, step: 1 },
+    ],
+  },
+  {
+    title: 'Anime characters',
+    fields: [
+      {
+        key: 'animeCheckpoint',
+        label: 'Anime image model',
+        type: 'select',
+        options: (o, current) => [
+          ['', 'None (no anime pictures)'],
+          ...withCurrent(o.checkpoints, current).map((c) => [c, c]),
+        ],
+        hint: 'Animagine XL 4.0 is installed by: npm run setup:images -- --anime',
+      },
+      {
+        key: 'animeStyle',
+        label: 'Quality tags (added at the end)',
+        type: 'textarea',
+        maxLength: 500,
+      },
+      { key: 'animeNegative', label: 'Things to avoid', type: 'textarea', maxLength: 1000 },
+      { key: 'animeSteps', label: 'Steps', type: 'number', min: 1, max: 100, step: 1 },
+      { key: 'animeCfg', label: 'Prompt strength (CFG)', type: 'range', min: 1, max: 12, step: 0.5 },
+      { key: 'animeSampler', label: 'Sampler', type: 'text', maxLength: 50 },
+      { key: 'animeScheduler', label: 'Scheduler', type: 'text', maxLength: 50 },
+      {
+        key: 'animeHiresScale',
+        label: 'Detail pass upscale',
+        type: 'range',
+        min: 1,
+        max: 2,
+        step: 0.05,
+        hint: '1 turns it off (the anime model is already sharp).',
+      },
+      {
+        key: 'animeFaceWeight',
+        label: 'Keep her reference face',
+        type: 'range',
+        min: 0,
+        max: 1,
+        step: 0.05,
+        hint: 'The face model is trained on photos: weaker on anime. Try 0.3–0.5, or keep 0 and rely on precise tags.',
+      },
+    ],
+  },
+  {
+    title: 'Display',
+    fields: [
+      {
+        key: 'chatBackground',
+        label: 'Her picture behind the chat',
+        type: 'select',
+        options: () => [
+          ['subtle', 'Subtle (blurred and dimmed)'],
+          ['clear', 'Clear'],
+          ['off', 'Off'],
+        ],
+        hint: 'Which picture is chosen per character in the editor (her scene, or her latest photo).',
+      },
     ],
   },
 ];

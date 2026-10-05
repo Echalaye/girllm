@@ -63,6 +63,8 @@ export interface AppDeps {
   characterService?: CharacterService | undefined;
   /** Reference faces (data/faces). */
   faces?: FaceStore | undefined;
+  /** Chat backgrounds (data/backgrounds). */
+  backgrounds?: FaceStore | undefined;
   /** Live settings (optional so tests can build a minimal app). */
   settings?: SettingsService | undefined;
   /** MODELS_DIR (voice models), for the settings' voice list. */
@@ -244,6 +246,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     memoryEnabled: Boolean(deps.memory),
     // The page uses it to decide when to ask "may she write first?" (the server still decides).
     proactiveAfterMinutes: deps.settings?.get().proactiveAfterMinutes ?? 0,
+    chatBackground: deps.settings?.get().chatBackground ?? 'subtle',
   }));
 
   if (deps.settings) {
@@ -259,7 +262,11 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     deps.characters.list().map((c) => ({
       ...toSummary(c),
       style: c.style,
+      artStyle: c.artStyle,
+      gender: c.gender,
+      background: c.backgroundMode,
       hasFace: deps.faces?.get(c.id) !== undefined,
+      hasBackground: deps.backgrounds?.get(c.id) !== undefined,
     })),
   );
 
@@ -268,6 +275,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       characters: deps.characters,
       characterService: deps.characterService,
       faces: deps.faces,
+      backgrounds: deps.backgrounds,
       images: deps.images,
     });
   }

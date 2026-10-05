@@ -85,7 +85,18 @@ describe('HTTP API', () => {
     await makeApp();
     const res = await app.inject({ method: 'GET', url: '/api/characters', headers: { host: HOST } });
     expect(res.json()).toEqual([
-      { id: 'aria', name: 'Aria', creatorNotes: '', tags: [], style: 'roleplay', hasFace: false },
+      {
+        id: 'aria',
+        name: 'Aria',
+        creatorNotes: '',
+        tags: [],
+        style: 'roleplay',
+        artStyle: 'realistic',
+        gender: 'female',
+        background: 'scene',
+        hasFace: false,
+        hasBackground: false,
+      },
     ]);
   });
 

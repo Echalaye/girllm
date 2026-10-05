@@ -6,7 +6,7 @@
  * context size, folders, providers) stays in `.env` only.
  */
 import { z } from 'zod';
-import { PHOTO_FREQUENCIES, type AppConfig } from '../config.js';
+import { CHAT_BACKGROUNDS, PHOTO_FREQUENCIES, type AppConfig } from '../config.js';
 import { TTS_VOICE_IDS, type TtsVoiceId } from '../voice/catalog.js';
 
 /** Safe identifiers for model / checkpoint / sampler names (no quotes, no shell chars). */
@@ -66,6 +66,20 @@ export const SettingsSchema = z.object({
   imageFaceWeight: z.number().min(0).max(1),
   /** Photos she sends on her own. */
   photoFrequency: z.enum(PHOTO_FREQUENCIES),
+  // --- Anime characters (their own image model)
+  /** "" = no anime photos. */
+  animeCheckpoint: fileName,
+  animeStyle: z.string().trim().max(500),
+  animeNegative: z.string().trim().max(1000),
+  animeSteps: z.number().int().min(1).max(100),
+  animeCfg: z.number().min(1).max(20),
+  animeSampler: identifier,
+  animeScheduler: identifier,
+  animeHiresScale: z.number().min(1).max(2),
+  animeFaceWeight: z.number().min(0).max(1),
+  // --- Interface
+  /** Her picture behind the chat. */
+  chatBackground: z.enum(CHAT_BACKGROUNDS),
 });
 
 export type Settings = z.infer<typeof SettingsSchema>;
@@ -105,5 +119,15 @@ export function defaultsFromConfig(config: AppConfig): Settings {
     imageHiresSteps: i.hires.steps,
     imageFaceWeight: i.faceWeight,
     photoFrequency: i.photoFrequency,
+    animeCheckpoint: i.anime.checkpoint ?? '',
+    animeStyle: i.anime.style,
+    animeNegative: i.anime.negative,
+    animeSteps: i.anime.steps,
+    animeCfg: i.anime.cfg,
+    animeSampler: i.anime.sampler,
+    animeScheduler: i.anime.scheduler,
+    animeHiresScale: i.anime.hiresScale,
+    animeFaceWeight: i.anime.faceWeight,
+    chatBackground: config.chatBackground,
   };
 }
