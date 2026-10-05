@@ -8,6 +8,7 @@ import type { LlmProvider } from '../../llm/types.js';
 import { SETTING_KEYS, type SettingKey } from '../../settings/settingsSchema.js';
 import type { SettingsService } from '../../settings/settingsService.js';
 import { TTS_VOICES, type TtsVoiceId } from '../../voice/catalog.js';
+import { MODEL_PRESETS } from '../../images/presets.js';
 import { isTtsVoiceInstalled } from '../../voice/sherpaVoice.js';
 
 export interface SettingsRoutesDeps {
@@ -35,6 +36,8 @@ export function registerSettingsRoutes(app: FastifyInstance, deps: SettingsRoute
       options: {
         models: llm.models ?? [],
         checkpoints: checkpoints ?? [],
+        // Recommended sampler settings of known image models (filled in when one is picked).
+        presets: MODEL_PRESETS.map(({ match, ...rest }) => ({ ...rest, pattern: match.source })),
         voices: (Object.keys(TTS_VOICES) as TtsVoiceId[]).map((id) => ({
           id,
           description: TTS_VOICES[id].description,

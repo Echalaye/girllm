@@ -390,7 +390,10 @@ describe('HTTP API - settings', () => {
     const res = (await app.inject({ method: 'GET', url: '/api/settings', headers: { host: HOST } })).json();
     expect(res.values.userName).toBe('Etienne');
     expect(res.options.models).toEqual(['fake']);
-    expect(res.options.voices.find((v: { id: string }) => v.id === 'fr-siwis')).toMatchObject({ installed: false });
+    expect(res.options.voices.find((v: { id: string }) => v.id === 'fr-siwis')).toMatchObject({ installed: false }); // Recommended settings per known model (step 6), regex sent as a string.
+    expect(res.options.presets).toContainEqual(
+      expect.objectContaining({ name: 'Juggernaut XL', pattern: 'juggernaut' }),
+    );
   });
 
   it('updates live (visible in /api/config), validates, and resets', async () => {

@@ -261,8 +261,23 @@ function addMessage(role, text, { pending = false, imageId = null } = {}) {
   return { wrap, body };
 }
 
-/** A photo she sent: thumbnail in the bubble, click to open full size. */
+/**
+ * A photo she sent: thumbnail in the bubble, click to open full size, and a
+ * "retake" button (same scene, new picture) for when a detail went wrong.
+ */
 function photoElement(imageId) {
+  const frame = el('div', 'photo-frame');
+  frame.dataset.imageId = imageId;
+  const retake = el('button', 'retake', '↻');
+  retake.type = 'button';
+  retake.title = 'Retake this photo (same scene, new picture)';
+  retake.setAttribute('aria-label', 'Retake this photo');
+  retake.addEventListener('click', () => void retakePhoto(frame));
+  frame.append(photoLink(imageId), retake);
+  return frame;
+}
+
+function photoLink(imageId) {
   const url = `/api/images/${encodeURIComponent(imageId)}`;
   const link = el('a', 'photo-link');
   link.href = url;
@@ -294,6 +309,7 @@ function renderSession(session) {
 
 function setBusy(busy) {
   for (const node of [els.send, els.regenerate, els.mic, els.photo, els.call]) node.disabled = busy;
+  for (const b of els.messages.querySelectorAll('.retake')) b.disabled = busy;
   els.stop.hidden = !busy;
   els.send.hidden = busy;
 }
@@ -584,6 +600,41 @@ async function addMemory() {
  * Ask her for a photo. Text typed in the box becomes the request
  * ("a selfie at the beach"); empty = she decides.
  */
+/**
+ * Retake a photo: the server draws the same scene again with a new seed and
+ * replaces the picture in its message (the old one is deleted).
+ */
+async function retakePhoto(frame) {
+  if (!state.sessionId || state.controller) return;
+  const imageId = frame.dataset.imageId;
+  state.controller = new AbortController();
+  setBusy(true);
+  frame.classList.add('retaking');
+  const started = Date.now();
+  const tick = () => setPresence(`retaking the photo… ${Math.round((Date.now() - started) / 1000)} s`);
+  tick();
+  const timer = setInterval(tick, 1000);
+  try {
+    const res = await fetch(`/api/sessions/${state.sessionId}/images/${encodeURIComponent(imageId)}/retake`, {
+      method: 'POST',
+      signal: state.controller.signal,
+    });
+    await ensureOk(res);
+    const { message } = await res.json();
+    frame.replaceWith(photoElement(message.imageId));
+    updateBackground(); // "latest photo" backgrounds follow
+    setStatus('');
+  } catch (err) {
+    frame.classList.remove('retaking');
+    setStatus(err.name === 'AbortError' ? 'Retake cancelled' : err.message, err.name !== 'AbortError');
+  } finally {
+    clearInterval(timer);
+    state.controller = null;
+    setBusy(false);
+    setPresence('');
+  }
+}
+
 async function sendPhoto() {
   if (!state.sessionId || state.controller) return;
   const request = els.input.value.trim();

@@ -45,6 +45,31 @@ export interface WorkflowParams {
  *   hires pass: 8 upscale (pixels) · 9 VAE encode · 10 sampler (low denoise) · 11 VAE decode
  *   face: 12 load image · 13 IP-Adapter model · 14 CLIP vision · 15 IP-Adapter (patched model)
  */
+/**
+ * Add the IP-Adapter face nodes (12–15) to a workflow whose checkpoint is
+ * node 1. Samplers must then use ['15', 0] as their model.
+ */
+export function addFaceAdapter(workflow: ComfyWorkflow, face: FaceParams): void {
+  workflow['12'] = { class_type: 'LoadImage', inputs: { image: face.image } };
+  workflow['13'] = { class_type: 'IPAdapterModelLoader', inputs: { ipadapter_file: FACE_IPADAPTER_MODEL.file } };
+  workflow['14'] = { class_type: 'CLIPVisionLoader', inputs: { clip_name: CLIP_VISION_MODEL.file } };
+  workflow['15'] = {
+    class_type: 'IPAdapterAdvanced',
+    inputs: {
+      model: ['1', 0],
+      ipadapter: ['13', 0],
+      image: ['12', 0],
+      clip_vision: ['14', 0],
+      weight: face.weight,
+      weight_type: 'linear',
+      combine_embeds: 'concat',
+      start_at: 0,
+      end_at: 1,
+      embeds_scaling: 'V only',
+    },
+  };
+}
+
 export function buildTxt2ImgWorkflow(p: WorkflowParams): ComfyWorkflow {
   const face = p.face && p.face.weight > 0 ? p.face : undefined;
   // Every sampler uses the face-patched model when there is a reference face.
@@ -74,26 +99,7 @@ export function buildTxt2ImgWorkflow(p: WorkflowParams): ComfyWorkflow {
     '6': { class_type: 'VAEDecode', inputs: { samples: ['5', 0], vae: ['1', 2] } },
   };
 
-  if (face) {
-    workflow['12'] = { class_type: 'LoadImage', inputs: { image: face.image } };
-    workflow['13'] = { class_type: 'IPAdapterModelLoader', inputs: { ipadapter_file: FACE_IPADAPTER_MODEL.file } };
-    workflow['14'] = { class_type: 'CLIPVisionLoader', inputs: { clip_name: CLIP_VISION_MODEL.file } };
-    workflow['15'] = {
-      class_type: 'IPAdapterAdvanced',
-      inputs: {
-        model: ['1', 0],
-        ipadapter: ['13', 0],
-        image: ['12', 0],
-        clip_vision: ['14', 0],
-        weight: face.weight,
-        weight_type: 'linear',
-        combine_embeds: 'concat',
-        start_at: 0,
-        end_at: 1,
-        embeds_scaling: 'V only',
-      },
-    };
-  }
+  if (face) addFaceAdapter(workflow, face);
 
   let finalImage: [string, number] = ['6', 0];
   if (p.hires && p.hires.scale > 1) {

@@ -93,6 +93,16 @@ const GROUPS = [
         hint: 'When you ask her for a photo in a message, she can always send one.',
       },
       {
+        key: 'realisticEngine',
+        label: 'Photo model (realistic characters)',
+        type: 'select',
+        options: () => [
+          ['flux2-klein', 'FLUX.2 [klein] 4B (recommended: natural bodies and hands)'],
+          ['sdxl', 'SDXL checkpoint (the image model below)'],
+        ],
+        hint: 'FLUX.2 needs: npm run setup:images -- --flux2-klein. Until it is installed, the SDXL model is used.',
+      },
+      {
         key: 'imageFaceWeight',
         label: 'Keep her reference face',
         type: 'range',
@@ -102,9 +112,19 @@ const GROUPS = [
         hint: '0 turns it off. 0.6–0.8 keeps her face while leaving the scene free. Needs: npm run setup:images',
       },
       {
+        key: 'imageDetailStrength',
+        label: 'Face detail pass',
+        type: 'range',
+        min: 0,
+        max: 0.7,
+        step: 0.05,
+        hint: 'Redraws small faces (waist-up, full body) at full resolution: fixes eyes. 0 turns it off; 0.3–0.4 is usual.',
+      },
+      {
         key: 'imageCheckpoint',
         label: 'Image model (realistic characters)',
         type: 'select',
+        presetFields: { sampler: 'imageSampler', scheduler: 'imageScheduler', steps: 'imageSteps', cfg: 'imageCfg' },
         options: (o, current) => [['', 'None (photos off)'], ...withCurrent(o.checkpoints, current).map((c) => [c, c])],
         hint: 'Checkpoints found in ComfyUI.',
       },
@@ -134,6 +154,7 @@ const GROUPS = [
         key: 'animeCheckpoint',
         label: 'Anime image model',
         type: 'select',
+        presetFields: { sampler: 'animeSampler', scheduler: 'animeScheduler', steps: 'animeSteps', cfg: 'animeCfg' },
         options: (o, current) => [
           ['', 'None (no anime pictures)'],
           ...withCurrent(o.checkpoints, current).map((c) => [c, c]),
@@ -169,6 +190,7 @@ const GROUPS = [
         step: 0.05,
         hint: 'The face model is trained on photos: weaker on anime. Try 0.3–0.5, or keep 0 and rely on precise tags.',
       },
+      { key: 'animeDetailStrength', label: 'Face detail pass', type: 'range', min: 0, max: 0.7, step: 0.05 },
     ],
   },
   {
@@ -260,6 +282,9 @@ export class SettingsPanel {
         input.append(opt);
       }
       input.value = value;
+      // Picking a model girllm knows fills in its recommended settings (not saved yet).
+      if (field.presetFields)
+        input.addEventListener('change', () => this.#applyPreset(input.value, field.presetFields));
     } else if (field.type === 'textarea') {
       input = el('textarea');
       input.rows = 2;
@@ -300,6 +325,19 @@ export class SettingsPanel {
       text: 'The settings you changed have not been saved.',
       action: 'Discard',
     });
+  }
+
+  /** Fill the sampler fields with a known model's recommended values. */
+  #applyPreset(checkpoint, fields) {
+    const preset = (this.options?.presets ?? []).find((p) => new RegExp(p.pattern, 'i').test(checkpoint));
+    if (!preset) return;
+    for (const [from, key] of Object.entries(fields)) {
+      const input = this.form.elements.namedItem(key);
+      if (!input) continue;
+      input.value = String(preset[from]);
+      input.dispatchEvent(new Event('input')); // updates range outputs
+    }
+    this.status.textContent = `Recommended settings for ${preset.name} filled in: Save to apply.`;
   }
 
   /** Only send what changed: unchanged keys stay at their current origin (.env or saved). */

@@ -6,7 +6,7 @@
  * context size, folders, providers) stays in `.env` only.
  */
 import { z } from 'zod';
-import { CHAT_BACKGROUNDS, PHOTO_FREQUENCIES, type AppConfig } from '../config.js';
+import { CHAT_BACKGROUNDS, PHOTO_FREQUENCIES, REALISTIC_ENGINES, type AppConfig } from '../config.js';
 import { TTS_VOICE_IDS, type TtsVoiceId } from '../voice/catalog.js';
 
 /** Safe identifiers for model / checkpoint / sampler names (no quotes, no shell chars). */
@@ -64,8 +64,12 @@ export const SettingsSchema = z.object({
   imageHiresSteps: z.number().int().min(4).max(60),
   /** Reference face strength (IP-Adapter); 0 = off. */
   imageFaceWeight: z.number().min(0).max(1),
+  /** Face detail pass strength; 0 = off. */
+  imageDetailStrength: z.number().min(0).max(0.7),
   /** Photos she sends on her own. */
   photoFrequency: z.enum(PHOTO_FREQUENCIES),
+  /** Image model of realistic characters (FLUX.2 [klein] or the SDXL checkpoint). */
+  realisticEngine: z.enum(REALISTIC_ENGINES),
   // --- Anime characters (their own image model)
   /** "" = no anime photos. */
   animeCheckpoint: fileName,
@@ -77,6 +81,7 @@ export const SettingsSchema = z.object({
   animeScheduler: identifier,
   animeHiresScale: z.number().min(1).max(2),
   animeFaceWeight: z.number().min(0).max(1),
+  animeDetailStrength: z.number().min(0).max(0.7),
   // --- Interface
   /** Her picture behind the chat. */
   chatBackground: z.enum(CHAT_BACKGROUNDS),
@@ -118,7 +123,9 @@ export function defaultsFromConfig(config: AppConfig): Settings {
     imageHiresDenoise: i.hires.denoise,
     imageHiresSteps: i.hires.steps,
     imageFaceWeight: i.faceWeight,
+    imageDetailStrength: i.detailStrength,
     photoFrequency: i.photoFrequency,
+    realisticEngine: i.realisticEngine,
     animeCheckpoint: i.anime.checkpoint ?? '',
     animeStyle: i.anime.style,
     animeNegative: i.anime.negative,
@@ -128,6 +135,7 @@ export function defaultsFromConfig(config: AppConfig): Settings {
     animeScheduler: i.anime.scheduler,
     animeHiresScale: i.anime.hiresScale,
     animeFaceWeight: i.anime.faceWeight,
+    animeDetailStrength: i.anime.detailStrength,
     chatBackground: config.chatBackground,
   };
 }

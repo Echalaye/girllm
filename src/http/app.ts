@@ -95,6 +95,7 @@ const MemoryParams = z.object({ id: z.string().uuid() });
 const CreateSessionBody = z.object({ characterId: CharacterId });
 const PhotoBody = z.object({ request: z.string().trim().max(300).default('') });
 const ImageParams = z.object({ id: z.string().uuid() });
+const RetakeParams = z.object({ id: z.string().uuid(), imageId: z.string().uuid() });
 
 const TtsBody = z.object({
   text: z.string().trim().min(1).max(MAX_TTS_CHARS),
@@ -359,6 +360,28 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       const message = await deps.chat.sendPhoto(id, photoRequest, controller.signal);
       const { id: messageId, role, content, imageId, createdAt } = message;
       return { message: { id: messageId, role, content, imageId, createdAt } };
+    } finally {
+      reply.raw.off('close', onClose);
+    }
+  });
+
+  /**
+   * Retake one of her photos: same scene, new seed (step 6). Long request
+   * like /photo; aborted if the browser disconnects. Returns the message with
+   * its new image id.
+   */
+  app.post('/api/sessions/:id/images/:imageId/retake', async (request, reply) => {
+    const { id, imageId } = RetakeParams.parse(request.params);
+    if (!deps.images) throw new ImageUnavailableError('Image generation is disabled');
+    const controller = new AbortController();
+    const onClose = () => {
+      if (!reply.raw.writableEnded) controller.abort(new Error('client disconnected'));
+    };
+    reply.raw.on('close', onClose);
+    try {
+      const message = await deps.chat.retakePhoto(id, imageId, controller.signal);
+      const { id: messageId, role, content, createdAt } = message;
+      return { message: { id: messageId, role, content, imageId: message.imageId, createdAt } };
     } finally {
       reply.raw.off('close', onClose);
     }

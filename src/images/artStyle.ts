@@ -91,11 +91,31 @@ export function sceneInstructions(style: ArtStyle): string[] {
         '  (lowercase, spaces instead of underscores), in this order:',
         '  framing (selfie, upper body, cowboy shot, full body…), pose and expression (looking at viewer, smile…),',
         '  outfit, location with two or three concrete details, lighting and time of day.',
+        '  Give the hands one simple thing to do (holding one object, resting), never two actions at once.',
+        '  Tag each held object only once (e.g. "holding book"), never two objects for the same hand.',
         '  Never add 1girl/1boy, solo, age, character names, rating or quality tags: they are added automatically.',
       ]
     : [
         '"scene": the photo for an image generator, in ENGLISH, as 12-30 comma-separated tags, in this order:',
-        '  shot type (close-up selfie, mirror selfie, waist-up photo taken by a friend…), camera angle,',
+        '  shot type (close-up selfie, mirror selfie, waist-up or full body photo taken by a friend…), camera angle,',
         '  pose and expression, outfit, location with two or three concrete details, light source, time of day.',
+        '  Give her hands one simple thing to do (holding one object, resting, in her hair), never two actions at once.',
+        '  Name each object she holds once ("holding a book"), without describing her hands or fingers.',
       ];
+}
+
+/** Taller SDXL frame (~1 megapixel) for full-body pictures. */
+export const FULL_BODY_SIZE = { width: 768, height: 1344 } as const;
+const FULL_BODY = /\bfull[\s-]?body\b|\bfull[\s-]length\b|\bhead to toe\b/i;
+
+/**
+ * Picture size for a scene (step 6). A full body squeezed into the default
+ * 832×1216 frame gets short legs or a stretched torso; the taller frame
+ * (same pixel count, same speed) gives SDXL room for natural proportions.
+ * Only a portrait-oriented configured size is changed: a landscape choice
+ * is the user's and is kept. Pure function (exported for tests).
+ */
+export function frameForScene(scene: string, width: number, height: number): { width: number; height: number } {
+  if (height > width && FULL_BODY.test(scene)) return { ...FULL_BODY_SIZE };
+  return { width, height };
 }

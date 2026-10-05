@@ -140,6 +140,22 @@ export class ChatService {
     });
   }
 
+  /**
+   * Retake one of her photos (step 6): same scene, new seed, the new picture
+   * replaces the old one in its message. One action per session at a time.
+   * @returns the updated message
+   */
+  retakePhoto(sessionId: string, imageId: string, signal?: AbortSignal): Promise<StoredMessage> {
+    return this.withLock(sessionId, async () => {
+      if (!this.images) throw new NotFoundError('Image generation');
+      const { session } = this.getSession(sessionId);
+      const message = session.messages.find((m) => m.imageId === imageId);
+      if (!message) throw new NotFoundError('Photo');
+      const newId = await this.images.retakePhoto(sessionId, message.id, imageId, signal);
+      return { ...message, imageId: newId };
+    });
+  }
+
   /** Add the user's message and stream the character's reply. */
   sendMessage(
     sessionId: string,

@@ -150,11 +150,29 @@ export class FakeComfy {
     clipFiles: ['CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors'],
   };
   uploads: Array<{ name: string; size: number }> = [];
+  /** FLUX.2 [klein] (step 6): node and file lists of a recent ComfyUI; null = old ComfyUI without it. */
+  flux: { unet: string[]; clip: string[]; vae: string[] } | null = null;
   private polls = 0;
 
   fetch = (async (input: string | URL, init?: RequestInit) => {
     const url = new URL(String(input));
     const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
+    const flux = this.flux;
+    if (flux) {
+      const node = url.pathname.replace('/object_info/', '');
+      const lists: Record<string, Record<string, string[]>> = {
+        EmptyFlux2LatentImage: {},
+        ReferenceLatent: {},
+        UNETLoader: { unet_name: flux.unet },
+        CLIPLoader: { clip_name: flux.clip },
+        VAELoader: { vae_name: flux.vae },
+      };
+      const inputs = lists[node];
+      if (inputs) {
+        const required = Object.fromEntries(Object.entries(inputs).map(([k, v]) => [k, [v]]));
+        return json({ [node]: { input: { required } } });
+      }
+    }
     if (url.pathname === '/object_info/CheckpointLoaderSimple') {
       return json({ CheckpointLoaderSimple: { input: { required: { ckpt_name: [this.checkpoints] } } } });
     }

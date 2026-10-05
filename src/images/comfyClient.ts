@@ -93,6 +93,40 @@ export class ComfyClient {
   }
 
   /**
+   * Files a loader node can pick (e.g. `UNETLoader`, `unet_name`), or [] when
+   * the node or ComfyUI is unavailable.
+   */
+  async modelFiles(nodeClass: string, input: string): Promise<string[]> {
+    const list = (await this.nodeInputs(nodeClass))?.[input]?.[0];
+    return Array.isArray(list) ? list.filter((v): v is string => typeof v === 'string') : [];
+  }
+
+  /**
+   * Can ComfyUI run FLUX.2 [klein]? Needs a recent ComfyUI (FLUX.2 nodes)
+   * and the three model files. The reason says what is missing.
+   */
+  async flux2Support(files: {
+    model: string;
+    textEncoder: string;
+    vae: string;
+  }): Promise<{ ready: boolean; reason?: string }> {
+    if (!(await this.nodeInputs('EmptyFlux2LatentImage')) || !(await this.nodeInputs('ReferenceLatent'))) {
+      return { ready: false, reason: 'this ComfyUI is too old for FLUX.2 (update ComfyUI)' };
+    }
+    const checks: Array<[string, string, string]> = [
+      ['UNETLoader', 'unet_name', files.model],
+      ['CLIPLoader', 'clip_name', files.textEncoder],
+      ['VAELoader', 'vae_name', files.vae],
+    ];
+    for (const [node, input, file] of checks) {
+      if (!(await this.modelFiles(node, input)).includes(file)) {
+        return { ready: false, reason: `${file} not found (run: npm run setup:images -- --flux2-klein)` };
+      }
+    }
+    return { ready: true };
+  }
+
+  /**
    * Upload an image into ComfyUI's input folder (overwriting a file with the
    * same name). @returns the name to give to a LoadImage node.
    */

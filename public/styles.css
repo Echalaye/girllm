@@ -646,9 +646,61 @@ input[type='range'] {
     opacity: 0.55;
   }
 }
+/* A photo and its "retake" button (top-right corner, shown on hover/focus). */
+.photo-frame {
+  position: relative;
+  width: fit-content;
+  max-width: 100%;
+}
 .photo-link {
   display: block;
   margin-bottom: 0.4rem;
+}
+.retake {
+  position: absolute;
+  top: 0.45rem;
+  right: 0.45rem;
+  width: 2rem;
+  height: 2rem;
+  border: 0;
+  border-radius: 50%;
+  background: rgb(0 0 0 / 55%);
+  color: #fff;
+  font-size: 1.05rem;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.photo-frame:hover .retake,
+.retake:focus-visible {
+  opacity: 1;
+}
+@media (hover: none) {
+  /* Touch screens: no hover, always visible. */
+  .retake {
+    opacity: 0.85;
+  }
+}
+.retake:disabled {
+  opacity: 0;
+  pointer-events: none;
+}
+.photo-frame.retaking .photo {
+  opacity: 0.45;
+  filter: blur(2px);
+  transition:
+    opacity 0.3s,
+    filter 0.3s;
+}
+.photo-frame.retaking .retake {
+  opacity: 1;
+  animation: spin 1.2s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 .photo {
   display: block;

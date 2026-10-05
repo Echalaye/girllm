@@ -29,60 +29,66 @@ public/speech.js (sentence splitter)   ──► /api/tts ──► voice/sherpa
 
 ## Modules
 
-| Path                                                  | Responsibility                                                                                                             |
-| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `src/config.ts`                                       | Load `.env` and validate it (zod). Fails fast                                                                              |
-| `src/db/database.ts`                                  | Open SQLite (WAL, foreign keys), run migrations, transaction helper                                                        |
-| `src/db/migrations.ts`                                | Ordered schema migrations, versioned with `PRAGMA user_version`                                                            |
-| `src/llm/types.ts`                                    | `LlmProvider` interface and message types                                                                                  |
-| `src/llm/sse.ts`                                      | Parses the SSE stream coming **from** the backend                                                                          |
-| `src/llm/ollamaProvider.ts`                           | Native Ollama client (`/api/chat`, `/api/tags`, unload). Sends `num_ctx`, `min_p`, `repeat_penalty`, `keep_alive`          |
-| `src/llm/ndjson.ts`                                   | Parses Ollama's newline-delimited JSON stream                                                                              |
-| `src/llm/openaiCompatProvider.ts`                     | Streaming client for `/v1/chat/completions` (llama.cpp, KoboldCpp, LM Studio)                                              |
-| `src/llm/createProvider.ts`                           | Picks the LLM and embedding providers from `LLM_PROVIDER`                                                                  |
-| `src/llm/complete.ts`                                 | Non-streaming helper (used by the background memory tasks)                                                                 |
-| `src/characters/*`                                    | Character Card V1/V2/V3 schemas, `.json`/`.png` loader, in-memory registry                                                 |
-| `src/characters/characterRepository.ts`               | Registry + writes: create/update (atomic V2 JSON, round-trip validated, stable id), import, export, remove; refuses minors |
-| `src/characters/characterService.ts`                  | Deleting a character cascades to her chats, photos, memories and face (refused while a chat is generating)                 |
-| `src/characters/faceStore.ts`                         | Reference faces (`data/faces/<id>.png\|jpg`) and temporary portrait candidates; paths built from validated ids only        |
-| `src/images/imageSanitizer.ts`                        | Uploaded faces: PNG/JPEG detection from the bytes, size limits, metadata stripped (EXIF, text, comments)                   |
-| `src/settings/settingsSchema.ts`                      | Settings changeable from the app (zod), `.env` defaults                                                                    |
-| `src/settings/settingsService.ts`                     | DB-backed overrides of the `.env` defaults, change listeners; services read them through getters (`Live<T>`)               |
-| `src/util/resolve.ts`                                 | `Live<T>` = a value or a function returning the current one (live settings without restarts)                               |
-| `src/util/atomicWrite.ts`                             | Write to a temporary file, then rename: never a half-written card or face                                                  |
-| `src/prompt/tokenEstimator.ts`                        | Cheap, conservative token estimate (~3.5 chars/token)                                                                      |
-| `src/prompt/promptBuilder.ts`                         | Card + memory + history → messages, within the token budget                                                                |
-| `src/chat/sessionStore.ts`                            | `SessionStore` interface and session/message types                                                                         |
-| `src/chat/sqliteSessionStore.ts`                      | SQLite implementation (prepared statements)                                                                                |
-| `src/chat/chatService.ts`                             | Send, regenerate, abort, list and delete chats. One generation per chat at a time                                          |
-| `src/memory/embeddings.ts`                            | `EmbeddingProvider`, `/v1/embeddings` client, vector maths and BLOB encoding                                               |
-| `src/memory/memoryStore.ts`                           | Long-term memories per character, brute-force cosine search                                                                |
-| `src/memory/summarizer.ts`                            | Which messages to summarize (pure function) and the summary prompt                                                         |
-| `src/memory/factExtractor.ts`                         | Fact + mood extraction prompt and tolerant JSON parsing                                                                    |
-| `src/memory/memoryService.ts`                         | Orchestration: build the memory context, schedule background tasks, de-duplication                                         |
-| `src/util/serialQueue.ts`                             | Runs async tasks one at a time per key (per character)                                                                     |
-| `src/util/gpuGate.ts`                                 | Shared/exclusive GPU access: LLM calls are shared, image generation is exclusive and waits for running calls               |
-| `src/llm/gated.ts`                                    | `GatedLlmProvider` / `GatedEmbeddingProvider`: route every LLM and embedding call through the gate                         |
-| `src/images/safety.ts`                                | Code-enforced "no minors" rule: term and age detection (EN/FR, Unicode-aware), forced `adult` tags and negatives           |
-| `src/images/photoPrompt.ts`                           | Asks the LLM for `{caption, scene}`, with tolerant JSON parsing and a fallback                                             |
-| `src/images/workflow.ts`                              | Standard SDXL txt2img graph in ComfyUI API format                                                                          |
-| `src/images/comfyClient.ts`                           | `/prompt`, `/history` polling, `/view` (PNG check), `/free`, cancel on abort, `/object_info` status                        |
-| `src/images/imageStore.ts`                            | Image metadata (file, scene, prompt, seed)                                                                                 |
-| `src/images/imageService.ts`                          | Orchestration: safety → photo idea → exclusive GPU phase → store file and messages                                         |
-| `src/util/mutex.ts`                                   | One-at-a-time execution that returns each task's result or error to its own caller (voice engines)                         |
-| `src/voice/catalog.ts`                                | Downloadable STT models and TTS voices: URL, pinned SHA-256, file layout                                                   |
-| `src/voice/sherpaVoice.ts`                            | Whisper and Piper engines, loaded lazily on first use, one request at a time                                               |
-| `src/voice/speechText.ts`                             | Strips `*actions*`, emojis, markdown and URLs before synthesis                                                             |
-| `src/voice/wav.ts`                                    | 16-bit WAV encoding and float32 PCM decoding                                                                               |
-| `scripts/setupVoice.ts`                               | `npm run setup:voice`: download, verify the checksum, then extract atomically                                              |
-| `public/speech.js`                                    | `SentenceSplitter`: streamed text → speakable sentences (never cuts inside `*actions*` or before a closing `»`)            |
-| `public/voice.js`                                     | `Recorder` (mic → 16 kHz mono float32) and `Speaker` (ordered playback queue, can be interrupted, `whenIdle()`)            |
-| `public/vad.js`                                       | `Downsampler` (→ 16 kHz) and `VoiceActivityDetector` (adaptive noise floor, hysteresis, pre-roll); pure, unit-tested       |
-| `public/pcm-capture.worklet.js`                       | AudioWorklet forwarding raw microphone samples in batches                                                                  |
-| `public/call.js`                                      | `CallSession`: mic → worklet → VAD → utterances; paused while she thinks and speaks                                        |
-| `public/app.js`, `api.js`, `settings.js`, `editor.js` | UI: chat and sidebar, fetch/SSE helpers, settings drawer, character editor                                                 |
-| `src/http/*`                                          | Routes, error mapping, security hooks, SSE to the browser                                                                  |
-| `src/index.ts`                                        | Composition root: wires everything, graceful shutdown                                                                      |
+| Path                                                  | Responsibility                                                                                                                              |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/config.ts`                                       | Load `.env` and validate it (zod). Fails fast                                                                                               |
+| `src/db/database.ts`                                  | Open SQLite (WAL, foreign keys), run migrations, transaction helper                                                                         |
+| `src/db/migrations.ts`                                | Ordered schema migrations, versioned with `PRAGMA user_version`                                                                             |
+| `src/llm/types.ts`                                    | `LlmProvider` interface and message types                                                                                                   |
+| `src/llm/sse.ts`                                      | Parses the SSE stream coming **from** the backend                                                                                           |
+| `src/llm/ollamaProvider.ts`                           | Native Ollama client (`/api/chat`, `/api/tags`, unload). Sends `num_ctx`, `min_p`, `repeat_penalty`, `keep_alive`                           |
+| `src/llm/ndjson.ts`                                   | Parses Ollama's newline-delimited JSON stream                                                                                               |
+| `src/llm/openaiCompatProvider.ts`                     | Streaming client for `/v1/chat/completions` (llama.cpp, KoboldCpp, LM Studio)                                                               |
+| `src/llm/createProvider.ts`                           | Picks the LLM and embedding providers from `LLM_PROVIDER`                                                                                   |
+| `src/llm/complete.ts`                                 | Non-streaming helper (used by the background memory tasks)                                                                                  |
+| `src/characters/*`                                    | Character Card V1/V2/V3 schemas, `.json`/`.png` loader, in-memory registry                                                                  |
+| `src/characters/characterRepository.ts`               | Registry + writes: create/update (atomic V2 JSON, round-trip validated, stable id), import, export, remove; refuses minors                  |
+| `src/characters/characterService.ts`                  | Deleting a character cascades to her chats, photos, memories and face (refused while a chat is generating)                                  |
+| `src/characters/faceStore.ts`                         | Reference faces (`data/faces/<id>.png\|jpg`) and temporary portrait candidates; paths built from validated ids only                         |
+| `src/images/imageSanitizer.ts`                        | Uploaded faces: PNG/JPEG detection from the bytes, size limits, metadata stripped (EXIF, text, comments)                                    |
+| `src/settings/settingsSchema.ts`                      | Settings changeable from the app (zod), `.env` defaults                                                                                     |
+| `src/settings/settingsService.ts`                     | DB-backed overrides of the `.env` defaults, change listeners; services read them through getters (`Live<T>`)                                |
+| `src/util/resolve.ts`                                 | `Live<T>` = a value or a function returning the current one (live settings without restarts)                                                |
+| `src/util/atomicWrite.ts`                             | Write to a temporary file, then rename: never a half-written card or face                                                                   |
+| `src/prompt/tokenEstimator.ts`                        | Cheap, conservative token estimate (~3.5 chars/token)                                                                                       |
+| `src/prompt/promptBuilder.ts`                         | Card + memory + history → messages, within the token budget                                                                                 |
+| `src/chat/sessionStore.ts`                            | `SessionStore` interface and session/message types                                                                                          |
+| `src/chat/sqliteSessionStore.ts`                      | SQLite implementation (prepared statements)                                                                                                 |
+| `src/chat/chatService.ts`                             | Send, regenerate, abort, list and delete chats. One generation per chat at a time                                                           |
+| `src/memory/embeddings.ts`                            | `EmbeddingProvider`, `/v1/embeddings` client, vector maths and BLOB encoding                                                                |
+| `src/memory/memoryStore.ts`                           | Long-term memories per character, brute-force cosine search                                                                                 |
+| `src/memory/summarizer.ts`                            | Which messages to summarize (pure function) and the summary prompt                                                                          |
+| `src/memory/factExtractor.ts`                         | Fact + mood extraction prompt and tolerant JSON parsing                                                                                     |
+| `src/memory/memoryService.ts`                         | Orchestration: build the memory context, schedule background tasks, de-duplication                                                          |
+| `src/util/serialQueue.ts`                             | Runs async tasks one at a time per key (per character)                                                                                      |
+| `src/util/gpuGate.ts`                                 | Shared/exclusive GPU access: LLM calls are shared, image generation is exclusive and waits for running calls                                |
+| `src/llm/gated.ts`                                    | `GatedLlmProvider` / `GatedEmbeddingProvider`: route every LLM and embedding call through the gate                                          |
+| `src/images/safety.ts`                                | Code-enforced "no minors" rule: term and age detection (EN/FR, Unicode-aware), forced `adult` tags and negatives                            |
+| `src/images/photoPrompt.ts`                           | Asks the LLM for `{caption, scene}`, with tolerant JSON parsing and a fallback                                                              |
+| `src/images/workflow.ts`                              | Standard SDXL txt2img graph in ComfyUI API format                                                                                           |
+| `src/images/comfyClient.ts`                           | `/prompt`, `/history` polling, `/view` (PNG check), `/free`, cancel on abort, `/object_info` status                                         |
+| `src/images/imageStore.ts`                            | Image metadata (file, scene, prompt, seed)                                                                                                  |
+| `src/images/imageService.ts`                          | Orchestration: safety → photo idea → exclusive GPU phase → store file and messages                                                          |
+| `src/images/renderPipeline.ts`                        | One picture end to end: generate, then the face detail pass when the face is small (shared with the test bench)                             |
+| `src/images/faceDetector.ts`                          | UltraFace RFB-640 (ONNX, onnxruntime-web/WASM, CPU): letterbox → most confident face box; lazy-loaded                                       |
+| `src/images/detailWorkflow.ts`                        | Face crop planning (square, context ×2.2, skip close-ups) and the core-node redraw-and-blend ComfyUI graph                                  |
+| `src/images/presets.ts`                               | Recommended sampler/scheduler/steps/CFG per known checkpoint; optional downloads (Juggernaut XI)                                            |
+| `src/images/flux2Workflow.ts`                         | FLUX.2 [klein] 4B (bench only): pinned files (model fp8, Qwen3 4B encoder, VAE) and the core-node graph, reference face via ReferenceLatent |
+| `scripts/compareImages.ts`, `imageBenchLib.ts`        | `npm run compare:images`: same shots and seeds through several models → HTML contact sheet                                                  |
+| `src/util/mutex.ts`                                   | One-at-a-time execution that returns each task's result or error to its own caller (voice engines)                                          |
+| `src/voice/catalog.ts`                                | Downloadable STT models and TTS voices: URL, pinned SHA-256, file layout                                                                    |
+| `src/voice/sherpaVoice.ts`                            | Whisper and Piper engines, loaded lazily on first use, one request at a time                                                                |
+| `src/voice/speechText.ts`                             | Strips `*actions*`, emojis, markdown and URLs before synthesis                                                                              |
+| `src/voice/wav.ts`                                    | 16-bit WAV encoding and float32 PCM decoding                                                                                                |
+| `scripts/setupVoice.ts`                               | `npm run setup:voice`: download, verify the checksum, then extract atomically                                                               |
+| `public/speech.js`                                    | `SentenceSplitter`: streamed text → speakable sentences (never cuts inside `*actions*` or before a closing `»`)                             |
+| `public/voice.js`                                     | `Recorder` (mic → 16 kHz mono float32) and `Speaker` (ordered playback queue, can be interrupted, `whenIdle()`)                             |
+| `public/vad.js`                                       | `Downsampler` (→ 16 kHz) and `VoiceActivityDetector` (adaptive noise floor, hysteresis, pre-roll); pure, unit-tested                        |
+| `public/pcm-capture.worklet.js`                       | AudioWorklet forwarding raw microphone samples in batches                                                                                   |
+| `public/call.js`                                      | `CallSession`: mic → worklet → VAD → utterances; paused while she thinks and speaks                                                         |
+| `public/app.js`, `api.js`, `settings.js`, `editor.js` | UI: chat and sidebar, fetch/SSE helpers, settings drawer, character editor                                                                  |
+| `src/http/*`                                          | Routes, error mapping, security hooks, SSE to the browser                                                                                   |
+| `src/index.ts`                                        | Composition root: wires everything, graceful shutdown                                                                                       |
 
 Dependencies only point "inwards": `http` → `chat` → `memory` / `prompt` / `characters` / `llm` → `db`.
 Nothing below `http` knows about HTTP, so a voice or CLI front-end can reuse it as is.
@@ -167,6 +173,7 @@ incompatible spaces. Old memories then rank by recency until they are re-learned
 | DELETE | `/api/memories/:id`                        | —                                                                               | `204`                                                                        |
 | GET    | `/api/images/status`                       | —                                                                               | `{ available, checkpoint?, reason? }`                                        |
 | POST   | `/api/sessions/:id/photo`                  | `{ request? }` (≤ 300 chars)                                                    | `{ message }` with `imageId` (20–60 s; cancelled if the client disconnects)  |
+| POST   | `/api/sessions/:id/images/:imageId/retake` | —                                                                               | `{ message }` with its new `imageId` (same scene, new seed; old one deleted) |
 | GET    | `/api/images/:id`                          | —                                                                               | `image/png`                                                                  |
 | GET    | `/api/voice`                               | —                                                                               | `{ stt: { available, model, reason? }, tts: {…} }`                           |
 | POST   | `/api/stt`                                 | `application/octet-stream`: float32 LE mono 16 kHz, ≤ 4 MB (~60 s)              | `{ text }` (empty if under 0.3 s)                                            |
@@ -301,3 +308,71 @@ for anime characters. Negatives always include the youth terms; anime adds a few
 then renders 1216×832 candidates with her reference face. The page picks the source (`latest` photo → scene → face)
 and the look (`chatBackground` setting) in `updateBackground()`; the layer is decorative (`aria-hidden`), blurred
 and veiled with the page colour so the text keeps its contrast in both themes.
+
+## Step 6: face detail pass and image test bench
+
+**Face detail pass** (`renderPipeline.ts`), inside the same exclusive GPU phase as the picture:
+
+```
+txt2img (ComfyUI) ─► PNG ─► FaceDetector.detect (CPU, ~0.1 s)
+  ─► no face / face > 40 % of the height (close-up) ─► keep the picture
+  ─► planFaceCrop: square around the face (×2.2 context, multiple of 8, kept inside the picture)
+  ─► upload as girllm_detail_source.png ─► ComfyUI: LoadImage ─► ImageCrop ─► ImageScale 1024
+       ─► VAEEncode ─► KSampler (denoise = detail strength, same seed/settings, + IP-Adapter face)
+       ─► VAEDecode ─► ImageScale back ─► SolidMask + FeatherMask (12 %) ─► ImageCompositeMasked ─► SaveImage
+```
+
+- Core ComfyUI nodes only: no custom node pack (Impact Pack would pull ultralytics, SAM2 and pickled `.pt` models).
+- The detector is a pinned (SHA-256) 1.6 MB MIT model in `MODELS_DIR/face-detector`, installed by
+  `setup:images`. onnxruntime-web runs it in WebAssembly: no native binaries or CUDA downloads (onnxruntime-node
+  is 300 MB and fetches CUDA packages at install). Loaded on first use, one thread.
+- One fixed upload name: jobs are serialized by the GPU gate and LoadImage re-reads a changed file (hash), so the
+  ComfyUI input folder doesn't grow.
+- Any failure of the pass (detector, upload, ComfyUI) keeps the generated picture and logs a warning; a cancel
+  (abort signal) still propagates. Reference portraits (close-ups by construction) skip the pass.
+
+**Full-body framing.** `frameForScene` (artStyle.ts) switches a portrait-oriented size to 768×1344 when the scene
+says "full body", "full-length" or "head to toe": same pixel count, room for natural proportions.
+
+**Presets.** `MODEL_PRESETS` match checkpoint names (RealVis, Juggernaut, Animagine); `/api/settings` sends them
+(regex as source string) and the settings panel fills the sampler fields when such a model is picked.
+
+**Test bench.** `compareImages.ts` reads the live settings from the DB, unloads Ollama, renders every
+(shot × seed × model) through `renderPicture` with the app's prompt builders and safety check, and rewrites the
+contact sheet after each picture (usable if interrupted). The HTML is static and escapes every value.
+
+**FLUX.2 [klein] 4B (6b, bench only).** A second graph family next to SDXL (`BenchModel.family`). The graph copies
+ComfyUI's official "Flux.2 Klein 4B Distilled" templates (node and input names checked against the ComfyUI source):
+`UNETLoader` + `CLIPLoader(type flux2)` + `VAELoader`, `CLIPTextEncode` → `ConditioningZeroOut` for the negative,
+`CFGGuider(cfg 1)`, `Flux2Scheduler(4 steps)`, `KSamplerSelect(euler)`, `RandomNoise`, `SamplerCustomAdvanced`,
+`EmptyFlux2LatentImage` (sizes rounded to 16). Her face: `LoadImage` → `ImageCrop` (face ×1.3, from the face
+detector) → `ImageScaleToTotalPixels(1 MP)` → `VAEEncode` → `ReferenceLatent` on both conditionings. The prompt
+(`buildFlux2Prompt`) is sentences, scene first, with its own photo style and a sentence asking for the face only.
+First bench (2026-10-05) without these: the whole portrait as reference was copied (clothes, framing) and
+"smartphone photo" put a phone in her hands in most pictures. `ComfyClient.flux2Support` checks the FLUX.2 nodes exist (recent ComfyUI)
+and the three files are listed by their loaders. Bench variants (`FLUX2_VARIANTS`): distilled 4 and 8 steps, without
+the face, and the undistilled base model (20 steps, CFG 5) whose node 5 is a real negative `CLIPTextEncode`
+(`FLUX2_NEGATIVE` + the youth terms) instead of `ConditioningZeroOut`; defaults `FLUX2_DEFAULT_VARIANTS` (8 steps,
+with and without a pose guide). Pose guide (nodes 50–54): `LoadImage(data/poses/<shot>.png)` →
+`ImageScaleToTotalPixels(1 MP)` → `VAEEncode` → `ReferenceLatent` chained after the face references, so the prompt
+can call them "image 1" (face) and "image 2" (pose, `FLUX2_POSE_HINT`); only used with a face reference. Tried and
+removed on 2026-10-05: a "correct hands" sentence, an "edit the hands" pass (Klein's edit mode returned a copy:
+mean pixel difference 3/255) and a 1.5× refine pass (same fingers, sharper). ComfyUI caches identical nodes, so
+bench columns sharing a first pass don't recompute it. The bench uses fixed seeds (`BENCH_SEEDS`, `chooseSeeds`). Not in the app yet, because:
+the distilled model ignores negative prompts (the youth negatives are one of the safety layers), there is no face
+detail pass for it, and its quality/speed on 8 GB must first be judged on the contact sheets.
+
+**FLUX.2 [klein] in the app (6b).** `ImageSettings.engine` (`REALISTIC_ENGINE`, setting `realisticEngine`) chooses
+the model of realistic characters. `ImageService.engineFor(style)` returns FLUX.2 when it is chosen and
+`ComfyClient.flux2Support` says the nodes and files are there (cached a minute), else the SDXL profile (with a
+note in `/api/images/status`), else an `ImageUnavailableError` saying what to install. `pictureJob(engine, …)`
+builds one job for either engine: FLUX.2 gets `buildFlux2Prompt` (sentences) checked by `assertSafeStrict` (the
+usual minor terms plus young-look words: it has no negative prompt to push them away), her face uploaded once
+(content hash in the name) and cropped by the face detector (`fluxFaceReference`), and `FLUX2_APP_SETTINGS`
+(8 steps, CFG 1, Euler); SDXL keeps IP-Adapter, the hires pass and the face detail pass. Chat photos, retakes,
+reference portraits (no face reference) and backgrounds all go through it.
+
+**Retake.** `ChatService.retakePhoto` (session lock, the image must be shown by a message of this chat) →
+`ImageService.retakePhoto`: same stored scene, new seed, current engine, `drawAndStore` (file then row), then the
+message points to the new image, and the old row and file are deleted. A failed retake changes nothing. In the
+page, the ↻ button on each photo calls the route and swaps the picture in place; Stop cancels it.

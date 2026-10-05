@@ -48,6 +48,7 @@ export class ImageStore {
       ),
       get: db.prepare('SELECT * FROM images WHERE id = ?'),
       bySession: db.prepare('SELECT * FROM images WHERE session_id = ?'),
+      delete: db.prepare('DELETE FROM images WHERE id = ?'),
     };
   }
 
@@ -76,6 +77,11 @@ export class ImageStore {
   get(id: string): StoredImage | undefined {
     const row = this.stmt.get!.get(id) as ImageRow | undefined;
     return row ? toImage(row) : undefined;
+  }
+
+  /** Remove a row (retaken photo); messages showing it lose it (ON DELETE SET NULL). */
+  delete(id: string): void {
+    this.stmt.delete!.run(id);
   }
 
   /** Images of a session (used to delete their files with the chat). */

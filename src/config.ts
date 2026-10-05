@@ -119,12 +119,10 @@ const ConfigSchema = z
     // Tuned for realistic "sent from a phone" photos; see README for an anime variant.
     IMAGE_STYLE: z.preprocess(
       blankAsUnset,
-      z
-        .string()
-        .max(500)
-        .default(
-          'candid smartphone photo, RAW photo, natural skin texture, realistic lighting, shallow depth of field, subtle film grain',
-        ),
+      z.string().max(500).default(
+        // No "shallow depth of field": it blurs the body and makes full-body shots look fake (step 6).
+        'candid smartphone photo, RAW photo, natural skin texture, natural body proportions, realistic lighting, subtle film grain',
+      ),
     ),
     IMAGE_NEGATIVE_PROMPT: z.preprocess(
       blankAsUnset,
@@ -134,7 +132,8 @@ const ConfigSchema = z
         .default(
           'cgi, 3d render, illustration, painting, drawing, anime, plastic skin, airbrushed, oversaturated, lowres, blurry, ' +
             'jpeg artifacts, bad anatomy, bad hands, extra fingers, missing fingers, deformed face, asymmetric eyes, ' +
-            'cross-eyed, watermark, text, logo, signature, multiple people',
+            'cross-eyed, overly muscular, unrealistic body proportions, elongated body, doll-like, watermark, text, logo, ' +
+            'signature, multiple people',
         ),
     ),
     // Second refinement pass: 1 = off, 1.25 = +25% resolution with re-sampling (sharper, ~1.6x slower).
@@ -143,8 +142,14 @@ const ConfigSchema = z
     IMAGE_HIRES_STEPS: z.coerce.number().int().min(4).max(60).default(15),
     // Reference face strength (IP-Adapter, `npm run setup:images`): 0 = off, 0.6–0.8 recommended.
     IMAGE_FACE_WEIGHT: z.coerce.number().min(0).max(1).default(0.7),
+    // Face detail pass (step 6): a small face is redrawn at full resolution. 0 = off.
+    IMAGE_DETAIL_STRENGTH: z.coerce.number().min(0).max(0.7).default(0.35),
     // She sends photos on her own: off | rare (≥ 12 of her messages apart) | often (≥ 5 apart).
     PHOTO_FREQUENCY: z.enum(['off', 'rare', 'often']).default('rare'),
+    // Image model of realistic characters (step 6): FLUX.2 [klein] 4B (better bodies and hands,
+    // npm run setup:images -- --flux2-klein) or the SDXL checkpoint above. Falls back to SDXL
+    // while FLUX.2 is not installed.
+    REALISTIC_ENGINE: z.enum(['flux2-klein', 'sdxl']).default('flux2-klein'),
     // --- Anime characters (step 5): their own image model and settings.
     // Animagine XL 4.0 Opt (run: npm run setup:images -- --anime); empty = no anime photos.
     ANIME_CHECKPOINT: z.preprocess(
@@ -184,6 +189,7 @@ const ConfigSchema = z
     ANIME_HIRES_SCALE: z.coerce.number().min(1).max(2).default(1),
     // The face IP-Adapter is trained on photos: off by default for anime (try 0.3–0.5).
     ANIME_FACE_WEIGHT: z.coerce.number().min(0).max(1).default(0),
+    ANIME_DETAIL_STRENGTH: z.coerce.number().min(0).max(0.7).default(0.3),
     // Her picture behind the chat: off | subtle (blurred, dimmed) | clear.
     CHAT_BACKGROUND: z.enum(['off', 'subtle', 'clear']).default('subtle'),
     // She writes first after this many minutes of silence (0 = never).
@@ -195,6 +201,8 @@ const ConfigSchema = z
   });
 
 export const PHOTO_FREQUENCIES = ['off', 'rare', 'often'] as const;
+export const REALISTIC_ENGINES = ['flux2-klein', 'sdxl'] as const;
+export type RealisticEngine = (typeof REALISTIC_ENGINES)[number];
 export const CHAT_BACKGROUNDS = ['off', 'subtle', 'clear'] as const;
 export type ChatBackground = (typeof CHAT_BACKGROUNDS)[number];
 export type PhotoFrequency = (typeof PHOTO_FREQUENCIES)[number];
@@ -252,7 +260,9 @@ export type AppConfig = Readonly<{
     negative: string;
     hires: Readonly<{ scale: number; denoise: number; steps: number }>;
     faceWeight: number;
+    detailStrength: number;
     photoFrequency: PhotoFrequency;
+    realisticEngine: RealisticEngine;
     /** Image profile for anime characters (same size and detail-pass strength as realistic). */
     anime: Readonly<{
       checkpoint: string | undefined;
@@ -264,6 +274,7 @@ export type AppConfig = Readonly<{
       negative: string;
       hiresScale: number;
       faceWeight: number;
+      detailStrength: number;
     }>;
   }>;
   chatBackground: ChatBackground;
@@ -341,7 +352,9 @@ export function parseConfig(env: NodeJS.ProcessEnv): AppConfig {
       negative: c.IMAGE_NEGATIVE_PROMPT.trim(),
       hires: Object.freeze({ scale: c.IMAGE_HIRES_SCALE, denoise: c.IMAGE_HIRES_DENOISE, steps: c.IMAGE_HIRES_STEPS }),
       faceWeight: c.IMAGE_FACE_WEIGHT,
+      detailStrength: c.IMAGE_DETAIL_STRENGTH,
       photoFrequency: c.PHOTO_FREQUENCY,
+      realisticEngine: c.REALISTIC_ENGINE,
       anime: Object.freeze({
         checkpoint: c.ANIME_CHECKPOINT,
         steps: c.ANIME_STEPS,
@@ -352,6 +365,7 @@ export function parseConfig(env: NodeJS.ProcessEnv): AppConfig {
         negative: c.ANIME_NEGATIVE_PROMPT.trim(),
         hiresScale: c.ANIME_HIRES_SCALE,
         faceWeight: c.ANIME_FACE_WEIGHT,
+        detailStrength: c.ANIME_DETAIL_STRENGTH,
       }),
     }),
     chatBackground: c.CHAT_BACKGROUND,

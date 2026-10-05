@@ -4,9 +4,10 @@ A **local, private AI companion / roleplay chat** that runs entirely on your own
 Nothing leaves your machine: the model runs on your GPU through [Ollama](https://ollama.com)
 (or any OpenAI-compatible server), and the app only listens on `127.0.0.1`.
 
-> **Status: step 5 done.** Streaming chat with characters, long-term memory, voice (push-to-talk or a hands-free
-> call), photos she sends with a consistent face, realistic or anime characters, her picture behind the chat,
-> messages she writes first, lorebooks, a character editor and settings you change from the app, all offline.
+> **Status: step 6 done.** Streaming chat with characters, long-term memory, voice (push-to-talk or a hands-free
+> call), photos she sends with a consistent face and detailed eyes, realistic or anime characters, her picture behind
+> the chat, messages she writes first, lorebooks, an image test bench, a character editor and settings you change
+> from the app, all offline.
 > See the [roadmap](#roadmap).
 
 [![CI](https://github.com/Echalaye/girllm/actions/workflows/ci.yml/badge.svg)](https://github.com/Echalaye/girllm/actions/workflows/ci.yml)
@@ -15,6 +16,37 @@ Nothing leaves your machine: the model runs on your GPU through [Ollama](https:/
 ---
 
 ## Features
+
+### Better photos and an image test bench (step 6)
+
+- **Realistic photos by FLUX.2 [klein] 4B** (default once installed: `npm run setup:images -- --flux2-klein`, recent
+  ComfyUI). It won every comparison on bodies, hands and framing, and is about 5× faster than the SDXL models
+  (~15 s per photo on an 8 GB card). Her face goes in as a reference picture (cropped to the face), the prompt is
+  written in sentences, 8 steps. Used for chat photos, reference portraits and chat backgrounds of realistic
+  characters; anime characters stay on Animagine. Until it is installed, the SDXL checkpoint is used. Settings →
+  Photos → "Photo model". Because this model has no negative prompt, its prompts go through a **stricter safety
+  check** (young-look words like "pigtails" or "baby face" are refused on top of the usual rules).
+- **Retake a photo**: the ↻ button on her photos draws the same scene again with a new picture and replaces it in
+  the chat (the old one is deleted). Handy when a hand or a detail came out wrong.
+- **Face detail pass** (like "ADetailer"): in a waist-up or full-body photo the face is only ~150 px wide, too few
+  pixels for SDXL to draw the eyes properly. girllm now finds the face (a 1.6 MB detector running on the CPU in
+  ~0.1 s), redraws that square at 1024 px with the same model, prompt and seed (and her reference face), then blends
+  it back with soft edges. Close-up portraits are left alone. Strength: Settings → "Face detail pass" (0.35 for
+  realistic, 0.3 for anime, 0 = off). It adds ~5–10 s per photo.
+- **More natural bodies**: full-body scenes are drawn in a taller frame (768×1344 instead of 832×1216, same speed),
+  and the default style no longer blurs the background (`shallow depth of field` made full bodies look fake), with
+  `natural body proportions` added and `overly muscular, unrealistic body proportions, elongated body, doll-like`
+  in the negative prompt.
+- **Juggernaut XI**, a second realistic model, better at full bodies and hands (`npm run setup:images --
+--juggernaut`, 7.1 GB, local like the others; licence CC BY-NC-ND 4.0: personal, non-commercial use).
+- **Recommended settings per model**: picking RealVisXL, Juggernaut or Animagine in Settings fills in its sampler,
+  scheduler, steps and CFG (click Save to apply).
+- **Image test bench**: `npm run compare:images` draws 10 test shots (portrait, selfie, mirror, desk, cup, standing,
+  sofa, outdoors, night, from behind) with the same seeds through each installed model, through the app's real
+  pipeline, and writes a contact sheet (`data/compare-images/<date>/index.html`) to compare them side by side, with
+  the picture before the face pass. See [Comparing image models](#comparing-image-models).
+- **FLUX.2 [klein] 4B in the test bench** (step 6b): compared with the SDXL models and with its own variants (steps,
+  base model, pose guide…) before it became the realistic photo model.
 
 ### Realistic or anime, and her picture behind the chat (step 5)
 
@@ -186,7 +218,13 @@ Open **http://127.0.0.1:3210**.
    ```powershell
    npm run setup:images            # IP-Adapter nodes (pinned commit) + 2 models (~3.4 GB, checksum-verified)
    npm run setup:images -- --anime # the same + Animagine XL 4.0 for anime characters (+6.9 GB)
+   npm run setup:images -- --juggernaut  # the same + Juggernaut XI, a second realistic model (+7.1 GB)
+   npm run setup:images -- --flux2-klein # the same + FLUX.2 [klein] 4B, for the test bench (+12.5 GB)
+   npm run setup:images -- --flux2-klein-base # + its undistilled model, slower, with a negative prompt (+4.1 GB)
    ```
+
+   It also installs the small face detector used by the face detail pass (1.6 MB, into `MODELS_DIR`). Flags can
+   be combined (`-- --anime --juggernaut`).
 
    Restart ComfyUI. The startup log should say `Reference faces: on (IP-Adapter)` (and `Anime photos: on`). Then
    give each character a reference face in the editor (generated or uploaded).
@@ -284,59 +322,62 @@ Mistral Nemo-based models (Mistral AI is French) and Qwen models handle French w
 
 ## Configuration (`.env`)
 
-| Variable                                    | Default                                           | Description                                                                                                                     |
-| ------------------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `HOST`                                      | `127.0.0.1`                                       | Keep loopback: the API has **no authentication**                                                                                |
-| `PORT`                                      | `3210`                                            |                                                                                                                                 |
-| `LLM_PROVIDER`                              | `ollama`                                          | `ollama` = native Ollama API (recommended). `openai` = any OpenAI-compatible server (llama.cpp, KoboldCpp, LM Studio)           |
-| `LLM_BASE_URL`                              | `http://127.0.0.1:11434`                          | Base URL **without** `/v1`                                                                                                      |
-| `LLM_KEEP_ALIVE`                            | `30m`                                             | How long Ollama keeps the model in VRAM after the last request (`2h`, `-1` = forever)                                           |
-| `LLM_MODEL`                                 | `mistral-nemo:12b-instruct-2407-q4_K_M`           | Model name as known by the backend                                                                                              |
-| `LLM_API_KEY`                               | _(empty)_                                         | Only for backends requiring one                                                                                                 |
-| `CONTEXT_TOKENS`                            | `8192`                                            | Context window. Applied automatically with `ollama`; with `openai` it must match the backend                                    |
-| `MAX_REPLY_TOKENS`                          | `400`                                             | Max reply length                                                                                                                |
-| `TEMPERATURE` / `TOP_P`                     | `0.7` / `0.95`                                    | Sampling. Lower temperature = more coherent                                                                                     |
-| `MIN_P`                                     | `0.05`                                            | Drops very unlikely tokens: the best guard against incoherent tangents                                                          |
-| `REPEAT_PENALTY`                            | `1.1`                                             | `>1` discourages repetition                                                                                                     |
-| `CHARACTERS_DIR`                            | `./characters`                                    |                                                                                                                                 |
-| `USER_NAME`                                 | `User`                                            | Your name in the story                                                                                                          |
-| `REPLY_LANGUAGE`                            | _(empty)_                                         | Force the reply language, e.g. `French`. Letters only. Empty = no constraint                                                    |
-| `DATA_DIR`                                  | `./data`                                          | Where `girllm.db` (chats, memories, settings), `images/` and `faces/` are stored. Git-ignored                                   |
-| `MEMORY_ENABLED`                            | `true`                                            | `false` = step 1 behaviour (chats are still saved)                                                                              |
-| `EMBEDDING_MODEL`                           | `paraphrase-multilingual`                         | Embedding model for memory search. Empty = memories picked by recency only                                                      |
-| `EMBEDDING_BASE_URL`                        | = `LLM_BASE_URL`                                  | Backend serving the embedding model                                                                                             |
-| `MEMORY_TOP_K`                              | `8`                                               | Max memories injected per reply                                                                                                 |
-| `MEMORY_EXTRACT_EVERY`                      | `4`                                               | Facts are extracted once this many new messages are pending                                                                     |
-| `VOICE_ENABLED`                             | `true`                                            | Voice buttons only appear for the models that are installed                                                                     |
-| `MODELS_DIR`                                | `./models`                                        | Where `npm run setup:voice` puts the voice models. Git-ignored                                                                  |
-| `STT_MODEL`                                 | `whisper-base`                                    | `whisper-tiny`, `whisper-base`, `whisper-small` (more accurate, ~3× slower)                                                     |
-| `STT_LANGUAGE`                              | _(empty = auto)_                                  | The language you speak, e.g. `fr`. Setting it avoids misdetections on short sentences                                           |
-| `TTS_VOICE`                                 | `fr-siwis`                                        | `fr-siwis`, `fr-jessica` (female), `fr-pierre`, `fr-tom` (male), `en-amy`                                                       |
-| `TTS_SPEED`                                 | `1`                                               | `0.5`–`2`                                                                                                                       |
-| `VOICE_THREADS`                             | `4`                                               | CPU threads per voice engine                                                                                                    |
-| `IMAGES_ENABLED`                            | `true`                                            | Shows the 📷 button (it explains why if ComfyUI isn't ready)                                                                    |
-| `COMFYUI_DIR`                               | _(empty)_                                         | ComfyUI install folder, so `start.bat` can start it. Only used by the launcher                                                  |
-| `COMFYUI_URL`                               | `http://127.0.0.1:8188`                           |                                                                                                                                 |
-| `IMAGE_CHECKPOINT`                          | _(empty = no photos)_                             | SDXL checkpoint file name, as listed by ComfyUI                                                                                 |
-| `IMAGE_WIDTH` / `IMAGE_HEIGHT`              | `832` / `1216`                                    | Multiples of 8. SDXL works best around 1 megapixel                                                                              |
-| `IMAGE_STEPS` / `IMAGE_CFG`                 | `25` / `5.5`                                      | See [Getting better photos](#getting-better-photos) for per-checkpoint values                                                   |
-| `IMAGE_SAMPLER` / `IMAGE_SCHEDULER`         | `dpmpp_2m` / `karras`                             | ComfyUI names                                                                                                                   |
-| `IMAGE_STYLE`                               | `candid smartphone photo, RAW photo, …`           | Tags added to every photo. For an anime look: `anime style, cel shading, vibrant colors` (and remove `anime` from the negative) |
-| `IMAGE_NEGATIVE_PROMPT`                     | `cgi, 3d render, plastic skin, …`                 | Child-related terms are always added on top, whatever you set                                                                   |
-| `IMAGE_HIRES_SCALE`                         | `1.25`                                            | Second refinement pass: sharper face and skin, ~1.6× slower. `1` = off                                                          |
-| `IMAGE_HIRES_DENOISE` / `IMAGE_HIRES_STEPS` | `0.35` / `15`                                     | How much the second pass may change the image / its steps                                                                       |
-| `IMAGE_FACE_WEIGHT`                         | `0.7`                                             | Reference face strength (IP-Adapter). `0` = off; 0.6–0.8 keeps her face while leaving the scene free                            |
-| `PHOTO_FREQUENCY`                           | `rare`                                            | Photos she sends on her own: `off`, `rare` (≥ 12 of her messages apart), `often` (≥ 5 apart). Asking for one lifts the limit    |
-| `PROACTIVE_AFTER_MINUTES`                   | `60`                                              | She writes first after this many minutes of silence. `0` = never                                                                |
-| `ANIME_CHECKPOINT`                          | `animagine-xl-4.0-opt.safetensors`                | Image model for anime characters (installed by `npm run setup:images -- --anime`)                                               |
-| `ANIME_STEPS` / `ANIME_CFG`                 | `28` / `5`                                        | Animagine's recommended values                                                                                                  |
-| `ANIME_SAMPLER` / `ANIME_SCHEDULER`         | `euler_ancestral` / `normal`                      | "Euler a", as recommended                                                                                                       |
-| `ANIME_STYLE`                               | `masterpiece, high score, great score, absurdres` | Quality tags, placed last in anime prompts                                                                                      |
-| `ANIME_NEGATIVE_PROMPT`                     | `lowres, bad anatomy, … low score, …`             | Youth-related tags are always added on top                                                                                      |
-| `ANIME_HIRES_SCALE`                         | `1`                                               | Detail pass for anime (off: the model is already sharp)                                                                         |
-| `ANIME_FACE_WEIGHT`                         | `0`                                               | Reference face for anime (the face model is trained on photos: try 0.3–0.5)                                                     |
-| `CHAT_BACKGROUND`                           | `subtle`                                          | Her picture behind the chat: `subtle` (blurred, dimmed), `clear` or `off`                                                       |
-| `LOG_LEVEL`                                 | `info`                                            | `debug`, `info`, `warn`…                                                                                                        |
+| Variable                                    | Default                                           | Description                                                                                                                                 |
+| ------------------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `HOST`                                      | `127.0.0.1`                                       | Keep loopback: the API has **no authentication**                                                                                            |
+| `PORT`                                      | `3210`                                            |                                                                                                                                             |
+| `LLM_PROVIDER`                              | `ollama`                                          | `ollama` = native Ollama API (recommended). `openai` = any OpenAI-compatible server (llama.cpp, KoboldCpp, LM Studio)                       |
+| `LLM_BASE_URL`                              | `http://127.0.0.1:11434`                          | Base URL **without** `/v1`                                                                                                                  |
+| `LLM_KEEP_ALIVE`                            | `30m`                                             | How long Ollama keeps the model in VRAM after the last request (`2h`, `-1` = forever)                                                       |
+| `LLM_MODEL`                                 | `mistral-nemo:12b-instruct-2407-q4_K_M`           | Model name as known by the backend                                                                                                          |
+| `LLM_API_KEY`                               | _(empty)_                                         | Only for backends requiring one                                                                                                             |
+| `CONTEXT_TOKENS`                            | `8192`                                            | Context window. Applied automatically with `ollama`; with `openai` it must match the backend                                                |
+| `MAX_REPLY_TOKENS`                          | `400`                                             | Max reply length                                                                                                                            |
+| `TEMPERATURE` / `TOP_P`                     | `0.7` / `0.95`                                    | Sampling. Lower temperature = more coherent                                                                                                 |
+| `MIN_P`                                     | `0.05`                                            | Drops very unlikely tokens: the best guard against incoherent tangents                                                                      |
+| `REPEAT_PENALTY`                            | `1.1`                                             | `>1` discourages repetition                                                                                                                 |
+| `CHARACTERS_DIR`                            | `./characters`                                    |                                                                                                                                             |
+| `USER_NAME`                                 | `User`                                            | Your name in the story                                                                                                                      |
+| `REPLY_LANGUAGE`                            | _(empty)_                                         | Force the reply language, e.g. `French`. Letters only. Empty = no constraint                                                                |
+| `DATA_DIR`                                  | `./data`                                          | Where `girllm.db` (chats, memories, settings), `images/` and `faces/` are stored. Git-ignored                                               |
+| `MEMORY_ENABLED`                            | `true`                                            | `false` = step 1 behaviour (chats are still saved)                                                                                          |
+| `EMBEDDING_MODEL`                           | `paraphrase-multilingual`                         | Embedding model for memory search. Empty = memories picked by recency only                                                                  |
+| `EMBEDDING_BASE_URL`                        | = `LLM_BASE_URL`                                  | Backend serving the embedding model                                                                                                         |
+| `MEMORY_TOP_K`                              | `8`                                               | Max memories injected per reply                                                                                                             |
+| `MEMORY_EXTRACT_EVERY`                      | `4`                                               | Facts are extracted once this many new messages are pending                                                                                 |
+| `VOICE_ENABLED`                             | `true`                                            | Voice buttons only appear for the models that are installed                                                                                 |
+| `MODELS_DIR`                                | `./models`                                        | Where `npm run setup:voice` puts the voice models. Git-ignored                                                                              |
+| `STT_MODEL`                                 | `whisper-base`                                    | `whisper-tiny`, `whisper-base`, `whisper-small` (more accurate, ~3× slower)                                                                 |
+| `STT_LANGUAGE`                              | _(empty = auto)_                                  | The language you speak, e.g. `fr`. Setting it avoids misdetections on short sentences                                                       |
+| `TTS_VOICE`                                 | `fr-siwis`                                        | `fr-siwis`, `fr-jessica` (female), `fr-pierre`, `fr-tom` (male), `en-amy`                                                                   |
+| `TTS_SPEED`                                 | `1`                                               | `0.5`–`2`                                                                                                                                   |
+| `VOICE_THREADS`                             | `4`                                               | CPU threads per voice engine                                                                                                                |
+| `IMAGES_ENABLED`                            | `true`                                            | Shows the 📷 button (it explains why if ComfyUI isn't ready)                                                                                |
+| `COMFYUI_DIR`                               | _(empty)_                                         | ComfyUI install folder, so `start.bat` can start it. Only used by the launcher                                                              |
+| `COMFYUI_URL`                               | `http://127.0.0.1:8188`                           |                                                                                                                                             |
+| `IMAGE_CHECKPOINT`                          | _(empty = no photos)_                             | SDXL checkpoint file name, as listed by ComfyUI                                                                                             |
+| `IMAGE_WIDTH` / `IMAGE_HEIGHT`              | `832` / `1216`                                    | Multiples of 8. SDXL works best around 1 megapixel                                                                                          |
+| `IMAGE_STEPS` / `IMAGE_CFG`                 | `25` / `5.5`                                      | See [Getting better photos](#getting-better-photos) for per-checkpoint values                                                               |
+| `IMAGE_SAMPLER` / `IMAGE_SCHEDULER`         | `dpmpp_2m` / `karras`                             | ComfyUI names                                                                                                                               |
+| `IMAGE_STYLE`                               | `candid smartphone photo, RAW photo, …`           | Tags added to every photo. For an anime look: `anime style, cel shading, vibrant colors` (and remove `anime` from the negative)             |
+| `IMAGE_NEGATIVE_PROMPT`                     | `cgi, 3d render, plastic skin, …`                 | Child-related terms are always added on top, whatever you set                                                                               |
+| `IMAGE_HIRES_SCALE`                         | `1.25`                                            | Second refinement pass: sharper face and skin, ~1.6× slower. `1` = off                                                                      |
+| `IMAGE_HIRES_DENOISE` / `IMAGE_HIRES_STEPS` | `0.35` / `15`                                     | How much the second pass may change the image / its steps                                                                                   |
+| `IMAGE_FACE_WEIGHT`                         | `0.7`                                             | Reference face strength (IP-Adapter). `0` = off; 0.6–0.8 keeps her face while leaving the scene free                                        |
+| `IMAGE_DETAIL_STRENGTH`                     | `0.35`                                            | Face detail pass: how much a small face is redrawn (0–0.7). `0` = off; above 0.45 the face may change                                       |
+| `PHOTO_FREQUENCY`                           | `rare`                                            | Photos she sends on her own: `off`, `rare` (≥ 12 of her messages apart), `often` (≥ 5 apart). Asking for one lifts the limit                |
+| `REALISTIC_ENGINE`                          | `flux2-klein`                                     | Photo model of realistic characters: `flux2-klein` (FLUX.2 [klein] 4B) or `sdxl` (`IMAGE_CHECKPOINT`). Falls back to `sdxl` until installed |
+| `PROACTIVE_AFTER_MINUTES`                   | `60`                                              | She writes first after this many minutes of silence. `0` = never                                                                            |
+| `ANIME_CHECKPOINT`                          | `animagine-xl-4.0-opt.safetensors`                | Image model for anime characters (installed by `npm run setup:images -- --anime`)                                                           |
+| `ANIME_STEPS` / `ANIME_CFG`                 | `28` / `5`                                        | Animagine's recommended values                                                                                                              |
+| `ANIME_SAMPLER` / `ANIME_SCHEDULER`         | `euler_ancestral` / `normal`                      | "Euler a", as recommended                                                                                                                   |
+| `ANIME_STYLE`                               | `masterpiece, high score, great score, absurdres` | Quality tags, placed last in anime prompts                                                                                                  |
+| `ANIME_NEGATIVE_PROMPT`                     | `lowres, bad anatomy, … low score, …`             | Youth-related tags are always added on top                                                                                                  |
+| `ANIME_HIRES_SCALE`                         | `1`                                               | Detail pass for anime (off: the model is already sharp)                                                                                     |
+| `ANIME_FACE_WEIGHT`                         | `0`                                               | Reference face for anime (the face model is trained on photos: try 0.3–0.5)                                                                 |
+| `ANIME_DETAIL_STRENGTH`                     | `0.3`                                             | Face detail pass for anime characters (0–0.7, `0` = off)                                                                                    |
+| `CHAT_BACKGROUND`                           | `subtle`                                          | Her picture behind the chat: `subtle` (blurred, dimmed), `clear` or `off`                                                                   |
+| `LOG_LEVEL`                                 | `info`                                            | `debug`, `info`, `warn`…                                                                                                                    |
 
 Invalid values stop the app at startup with an explicit message.
 
@@ -348,19 +389,20 @@ values". Ports, folders, context size and providers stay in `.env` (they need a 
 
 ## Scripts
 
-| Command                           | Description                                                                                                                                                  |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `start.bat`                       | One-click launcher: Ollama + ComfyUI + girllm + browser (Windows)                                                                                            |
-| `npm run launch`                  | Same launcher, any OS (`-- --no-browser` to skip the browser)                                                                                                |
-| `npm run dev`                     | Start with hot reload (tsx)                                                                                                                                  |
-| `npm run setup:voice`             | Download the voice models chosen in `.env`. `-- --list` shows all of them, `-- fr-tom whisper-small` installs specific ones                                  |
-| `npm run setup:images`            | Install IP-Adapter (consistent face) into `COMFYUI_DIR`: nodes at a pinned commit, models checked by SHA-256 (needs git). `-- --anime` adds Animagine XL 4.0 |
-| `npm run build` / `npm start`     | Compile to `dist/` and run                                                                                                                                   |
-| `npm run typecheck`               | TypeScript strict check                                                                                                                                      |
-| `npm test`                        | Unit + HTTP tests (Vitest), no GPU needed                                                                                                                    |
-| `npm run lint` / `lint:fix`       | ESLint (type-aware `typescript-eslint` strict rules)                                                                                                         |
-| `npm run format` / `format:check` | Prettier                                                                                                                                                     |
-| `npm run check`                   | Everything CI runs: format check, lint, types, tests                                                                                                         |
+| Command                           | Description                                                                                                                                                                                                                                                                                                |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `start.bat`                       | One-click launcher: Ollama + ComfyUI + girllm + browser (Windows)                                                                                                                                                                                                                                          |
+| `npm run launch`                  | Same launcher, any OS (`-- --no-browser` to skip the browser)                                                                                                                                                                                                                                              |
+| `npm run dev`                     | Start with hot reload (tsx)                                                                                                                                                                                                                                                                                |
+| `npm run setup:voice`             | Download the voice models chosen in `.env`. `-- --list` shows all of them, `-- fr-tom whisper-small` installs specific ones                                                                                                                                                                                |
+| `npm run setup:images`            | Install IP-Adapter (consistent face) into `COMFYUI_DIR`: nodes at a pinned commit, models checked by SHA-256 (needs git), and the face detector. `-- --anime` adds Animagine XL 4.0, `-- --juggernaut` Juggernaut XI, `-- --flux2-klein` FLUX.2 [klein] 4B (bench), `-- --flux2-klein-base` its base model |
+| `npm run compare:images`          | Image test bench: the same test shots through several models, contact sheet in `data/compare-images/` (ComfyUI must be running). See [Comparing image models](#comparing-image-models)                                                                                                                     |
+| `npm run build` / `npm start`     | Compile to `dist/` and run                                                                                                                                                                                                                                                                                 |
+| `npm run typecheck`               | TypeScript strict check                                                                                                                                                                                                                                                                                    |
+| `npm test`                        | Unit + HTTP tests (Vitest), no GPU needed                                                                                                                                                                                                                                                                  |
+| `npm run lint` / `lint:fix`       | ESLint (type-aware `typescript-eslint` strict rules)                                                                                                                                                                                                                                                       |
+| `npm run format` / `format:check` | Prettier                                                                                                                                                                                                                                                                                                   |
+| `npm run check`                   | Everything CI runs: format check, lint, types, tests                                                                                                                                                                                                                                                       |
 
 **CI**: GitHub Actions (`.github/workflows/ci.yml`) runs formatting, lint, type check, tests and build on Node 22 and 24
 for every push and pull request. No GPU or model is needed: the LLM, ComfyUI and voice engines are mocked in the tests.
@@ -450,8 +492,12 @@ mic ─► AudioWorklet (raw samples) ─► downsampled to 16 kHz ─► voice 
   ─► final prompt = "adult" + IMAGE_STYLE + card appearance + scene  ─► safety check
   ─► her reference face uploaded to ComfyUI (once per face, if IP-Adapter is installed)
   ─► EXCLUSIVE GPU PHASE                          (other LLM calls wait, in every chat)
-       unload the Ollama model ─► ComfyUI SDXL txt2img (+ IP-Adapter face) ─► ComfyUI /free
+       unload the Ollama model ─► ComfyUI: FLUX.2 [klein] 8 steps (her face as a reference picture)
+                                  or SDXL txt2img (+ IP-Adapter face)
+       ─► SDXL only: face detail pass: find the face (CPU) ─► small? redraw it at 1024 px, blend it back
+       ─► ComfyUI /free
   ─► PNG saved in data/images, "📷 request" + photo message added to the chat
+  ↻ retake: same scene, new seed, the new picture replaces the old one in its message
 ```
 
 - The "GPU gate" ensures nothing uses the LLM during generation, including background memory tasks and other
@@ -500,6 +546,59 @@ always there. Keywords are plain text, never regular expressions. Imported Silly
 4. **Describe the photo you want**: "mirror selfie in the elevator, gym clothes" beats "a photo". Without a
    request, she picks something that fits the time of day and the conversation.
 
+5. **Leave the face detail pass on** (Settings → "Face detail pass", 0.35). If her face changes too much between
+   the photo and the redraw, lower it to 0.25; if eyes are still odd, try 0.45.
+6. **Full bodies**: ask for "full body" (or "head to toe") and the photo is drawn in a taller frame. If bodies still
+   look wrong with RealVisXL, try Juggernaut XI and compare (below).
+
+### Comparing image models
+
+```powershell
+npm run setup:images -- --flux2-klein  # once: FLUX.2 [klein] 4B
+npm run compare:images -- --character magi                     # Klein columns, 10 shots, 4 fixed seeds
+npm run compare:images -- --character magi --shots desk,cup,sofa --seeds 2
+npm run compare:images -- --seed-list 84370200426139,108282413766794
+npm run compare:images -- --models flux2-klein-4b-8steps,RealVisXL_V5.0_fp16.safetensors
+npm run compare:images -- --style anime
+```
+
+- ComfyUI must be running. Ollama's model is unloaded first: don't chat during the run.
+- Realistic characters: once FLUX.2 [klein] is installed, only its columns are compared (it replaced the SDXL photo
+  models). Without it: your SDXL model and the other known SDXL models installed. Anime: your model and Animagine.
+- **Always the same seeds** (4 by default, `--seeds 1` to `8`, or your own with `--seed-list`): two runs draw the
+  same pictures, so a change is judged on identical cases. Hands vary a lot from one seed to another.
+- Every model gets the same shots and seeds, its recommended settings (yours for the model currently selected),
+  and the app's real pipeline (adult safety terms, face detail pass for SDXL, full-body framing).
+- `--character <id>` uses her appearance, gender, style and reference face. Without it, a neutral adult subject.
+- `--shots` takes ids among `portrait, selfie, mirror, desk, cup, standing, sofa, outdoor, night, back`.
+- **FLUX.2 [klein] 4B** is three files (the model in fp8, the Qwen3 4B text encoder and the FLUX.2 VAE, in ComfyUI's
+  `diffusion_models`, `text_encoders` and `vae` folders). Its columns, by id for `--models`:
+
+  | Id                           | What                                                                           | Default |
+  | ---------------------------- | ------------------------------------------------------------------------------ | ------- |
+  | `flux2-klein-4b-8steps`      | Distilled model, 8 steps, CFG 1, ~14 s: same picture as 4 steps, cleaner       | yes     |
+  | `flux2-klein-4b-8steps-pose` | Same + a pose guide (see below), for the shots that have one                   | yes     |
+  | `flux2-klein-4b`             | Distilled model, 4 steps (official setting), ~12 s                             | no      |
+  | `flux2-klein-4b-base`        | Undistilled model, 20 steps, CFG 5, real negative prompt: too saturated, ~70 s | no      |
+  | `flux2-klein-4b-noref`       | Distilled model without her face, to see what the reference does               | no      |
+
+  **Pose guides** (experimental): `data/poses/<shot id>.png` is a picture of that shot whose body and hands are right,
+  chosen on an earlier sheet (for example `cup.png`, `desk.png`, `mirror.png`, `standing.png`, `sofa.png`). With
+  `--character`, the `-pose` column gives it to Klein as a second reference picture ("image 2", after her face),
+  with the instruction to copy only the pose and the way her hands hold things, not the face, hair, clothes or
+  background. Shots without a guide are drawn without one. Words don't fix anatomy: a "correct hands" sentence, an
+  "edit the hands" second pass and a 1.5× refine pass were tried and removed (no visible change).
+
+  Its prompt is written in sentences (scene first) with its own photo style: the SDXL tag list and "smartphone photo" style made it draw a phone in most pictures.
+  Her face is given as a reference picture, cropped to the face so that it doesn't copy the clothes and framing of
+  her portrait. The distilled model **ignores negative prompts** (the adult terms of the prompt and the text safety
+  check still apply); the base model uses one: bad hands, extra fingers or limbs, and the youth terms. No face detail
+  pass for FLUX.2. ComfyUI's guide lists ~8.4 GB of VRAM for it: on an 8 GB card part of it is kept in RAM. If the
+  bench says ComfyUI is too old, update ComfyUI (the portable build has `update\update_comfyui.bat`).
+
+- Open `data/compare-images/<date>/index.html`: one row per shot, one column per model, timing, and "before the face
+  pass" to see what the detail pass changed. `results.json` holds the same data.
+
 ## How memory works
 
 ```
@@ -538,6 +637,10 @@ each reply ─► prompt = character card
      lorebooks
 5. ✅ **Art styles and backgrounds**: realistic or anime characters (Animagine XL 4.0), women and men, her picture
    behind the chat (generated scene, latest photo, or face)
+6. ✅ **Better photos**: face detail pass, more natural full bodies, Juggernaut XI, recommended settings per model,
+   and an image test bench to compare models
+   - 6b ✅ FLUX.2 [klein] 4B: compared on the test bench, then the realistic photo model of the app, with a stricter
+     safety check and a "retake" button on photos
 
 Ideas for later: a LoRA for an even more consistent face (especially for anime characters), voice cloning (option B: a Python XTTS service),
 interrupting her by talking during a call, and phone access through Tailscale.

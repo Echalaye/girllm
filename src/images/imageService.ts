@@ -8,6 +8,10 @@
  *
  * Each character is drawn in her art style (step 5): realistic photos or
  * anime, each with its own image profile (checkpoint, sampler, tags…).
+ * Realistic characters are drawn by FLUX.2 [klein] 4B when it is installed
+ * (step 6: natural bodies and hands, her face as a reference picture),
+ * otherwise by the SDXL checkpoint. A photo can be retaken: same scene, new
+ * seed, replacing the picture in its message.
  */
 import { createHash, randomInt, randomUUID } from 'node:crypto';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
@@ -23,9 +27,23 @@ import type { GpuGate } from '../util/gpuGate.js';
 import type { ComfyClient } from './comfyClient.js';
 import type { ImageStore, StoredImage } from './imageStore.js';
 import { writePhotoIdea } from './photoPrompt.js';
-import { assertSafe, cardStatesMinorAge, ImageRefusedError } from './safety.js';
-import { buildNegativePrompt, buildPositivePrompt, type ArtStyle, type Gender } from './artStyle.js';
-import { buildTxt2ImgWorkflow, type ComfyWorkflow, type HiresParams } from './workflow.js';
+import { assertSafe, assertSafeStrict, cardStatesMinorAge, ImageRefusedError } from './safety.js';
+import { buildNegativePrompt, buildPositivePrompt, frameForScene, type ArtStyle, type Gender } from './artStyle.js';
+import { buildTxt2ImgWorkflow, type HiresParams } from './workflow.js';
+import type { FaceDetector } from './faceDetector.js';
+import { renderPicture, type RenderJob } from './renderPipeline.js';
+import type { RealisticEngine } from '../config.js';
+import type { CropBox } from './detailWorkflow.js';
+import {
+  buildFlux2Prompt,
+  buildFlux2Workflow,
+  FLUX2_APP_SETTINGS,
+  FLUX2_KLEIN_MODEL,
+  FLUX2_KLEIN_TEXT_ENCODER,
+  FLUX2_VAE,
+  referenceCrop,
+} from './flux2Workflow.js';
+import { pngSize } from './renderPipeline.js';
 
 /** Framing of the reference portraits generated in the character editor. */
 export const PORTRAIT_SCENE = {
@@ -46,6 +64,11 @@ const BACKGROUND_SIZE = { width: 1216, height: 832 } as const;
 export const PHOTO_REQUEST_PREFIX = '📷 ';
 
 export interface ImageSettings {
+  /**
+   * Realistic profile only: which model draws (default 'sdxl'). 'flux2-klein'
+   * falls back to the checkpoint while FLUX.2 [klein] is not installed.
+   */
+  engine?: RealisticEngine | undefined;
   /** Checkpoint file name as listed by ComfyUI; undefined = images unavailable. */
   checkpoint: string | undefined;
   width: number;
@@ -61,6 +84,8 @@ export interface ImageSettings {
   hires?: HiresParams | undefined;
   /** 0–1: strength of the reference face (IP-Adapter); 0 or undefined = off. */
   faceWeight?: number | undefined;
+  /** Face detail pass: how much a small face is redrawn (0 or undefined = off). */
+  detailStrength?: number | undefined;
 }
 
 export interface ImageServiceOptions {
@@ -87,7 +112,14 @@ export interface StyleStatus {
   reason?: string;
   /** Reference faces: applied to pictures, or why not. */
   face?: { ready: boolean; reason?: string };
+  /** Model drawing this style right now. */
+  engine?: RealisticEngine;
+  /** Why the chosen engine isn't the one in the settings (FLUX.2 not installed…). */
+  note?: string;
 }
+
+/** What draws a picture: FLUX.2 [klein], or SDXL with its profile. */
+type Engine = { kind: 'flux2-klein' } | { kind: 'sdxl'; p: ImageSettings & { checkpoint: string } };
 
 /** Who to draw, when there is no character yet (editor previews). */
 export interface Subject {
@@ -112,6 +144,8 @@ export class ImageService {
     private readonly options: Live<ImageServiceOptions>,
     /** Reference faces (optional: without it pictures use the text prompt only). */
     private readonly faces?: FaceStore,
+    /** Finds the face for the detail pass (optional: no detail pass without it). */
+    private readonly detector?: FaceDetector,
   ) {
     this.imagesDir = resolvePath(this.opts.imagesDir);
   }
@@ -120,6 +154,10 @@ export class ImageService {
   private faceSupportCache: { at: number; value: { ready: boolean; reason?: string } } | undefined;
   /** Reference faces already uploaded to ComfyUI: our name → name to use in LoadImage. */
   private readonly uploadedFaces = new Map<string, string>();
+  /** FLUX.2 [klein] readiness, cached like faceSupport. */
+  private fluxSupportCache: { at: number; value: { ready: boolean; reason?: string } } | undefined;
+  /** Face crop of each uploaded reference (FLUX.2 copies the whole picture otherwise). */
+  private readonly faceCrops = new Map<string, CropBox | undefined>();
 
   /** Current options (re-read on every use). */
   private get opts(): ImageServiceOptions {
@@ -154,34 +192,181 @@ export class ImageService {
   }
 
   /**
-   * The character's face as IP-Adapter input, or undefined when it can't or
-   * shouldn't be used (no face, weight 0, nodes/models missing). Never
-   * fails the picture: problems are logged and it is made without it.
+   * Upload the character's reference face to ComfyUI (once per content:
+   * the name contains a hash of the file) and return its LoadImage name.
+   * @returns undefined when she has no face
+   */
+  private async uploadFace(characterId: string): Promise<{ image: string; bytes: Buffer; png: boolean } | undefined> {
+    const face = this.faces?.get(characterId);
+    if (!face) return undefined;
+    const bytes = await readFile(face.path);
+    // Content-addressed name: a new face gets a new name, an unchanged one
+    // is uploaded once per run.
+    const hash = createHash('sha256').update(bytes).digest('hex').slice(0, 16);
+    const png = face.type === 'png';
+    const name = `girllm_face_${characterId}_${hash}.${png ? 'png' : 'jpg'}`;
+    let image = this.uploadedFaces.get(name);
+    if (!image) {
+      image = await this.comfy.uploadImage(bytes, name, png ? 'image/png' : 'image/jpeg');
+      this.uploadedFaces.set(name, image);
+    }
+    return { image, bytes, png };
+  }
+
+  /**
+   * The character's face as IP-Adapter input (SDXL), or undefined when it
+   * can't or shouldn't be used (no face, weight 0, nodes/models missing).
+   * Never fails the picture: problems are logged and it is made without it.
    */
   private async faceReference(characterId: string, weight: number): Promise<FaceParams | undefined> {
-    const face = weight > 0 ? this.faces?.get(characterId) : undefined;
-    if (!face) return undefined;
+    if (weight <= 0 || !this.faces?.get(characterId)) return undefined;
     try {
       const support = await this.faceSupport();
       if (!support.ready) {
         this.log.info({ reason: support.reason }, 'reference face not applied');
         return undefined;
       }
-      const bytes = await readFile(face.path);
-      // Content-addressed name: a new face gets a new name, an unchanged one
-      // is uploaded once per run.
-      const hash = createHash('sha256').update(bytes).digest('hex').slice(0, 16);
-      const name = `girllm_face_${characterId}_${hash}.${face.type === 'png' ? 'png' : 'jpg'}`;
-      let image = this.uploadedFaces.get(name);
-      if (!image) {
-        image = await this.comfy.uploadImage(bytes, name, face.type === 'png' ? 'image/png' : 'image/jpeg');
-        this.uploadedFaces.set(name, image);
-      }
-      return { image, weight };
+      const face = await this.uploadFace(characterId);
+      return face ? { image: face.image, weight } : undefined;
     } catch (err) {
       this.log.warn({ err }, 'could not use the reference face; picture made without it');
       return undefined;
     }
+  }
+
+  /**
+   * The character's face as FLUX.2 reference picture ("image 1"), cropped to
+   * the face when the detector finds it (PNG faces). FLUX.2 needs no extra
+   * nodes for this. Never fails the picture.
+   */
+  private async fluxFaceReference(characterId: string): Promise<{ image: string; crop?: CropBox } | undefined> {
+    try {
+      const face = await this.uploadFace(characterId);
+      if (!face) return undefined;
+      if (!this.faceCrops.has(face.image)) {
+        let crop: CropBox | undefined;
+        if (face.png && this.detector?.available()) {
+          const box = await this.detector.detect(face.bytes).catch(() => undefined);
+          if (box) {
+            const { width, height } = pngSize(face.bytes);
+            crop = referenceCrop(box, width, height);
+          }
+        }
+        this.faceCrops.set(face.image, crop);
+      }
+      const crop = this.faceCrops.get(face.image);
+      return crop ? { image: face.image, crop } : { image: face.image };
+    } catch (err) {
+      this.log.warn({ err }, 'could not use the reference face; picture made without it');
+      return undefined;
+    }
+  }
+
+  /** Are the FLUX.2 [klein] nodes and files there? (cached for a minute) */
+  async fluxSupport(): Promise<{ ready: boolean; reason?: string }> {
+    const now = Date.now();
+    if (this.fluxSupportCache && now - this.fluxSupportCache.at < 60_000) return this.fluxSupportCache.value;
+    const value = await this.comfy.flux2Support({
+      model: FLUX2_KLEIN_MODEL.file,
+      textEncoder: FLUX2_KLEIN_TEXT_ENCODER.file,
+      vae: FLUX2_VAE.file,
+    });
+    this.fluxSupportCache = { at: now, value };
+    return value;
+  }
+
+  /**
+   * Which model draws this style now: FLUX.2 [klein] for realistic
+   * characters when chosen and installed, else the SDXL profile.
+   * @throws ImageUnavailableError with what to install
+   */
+  private async engineFor(style: ArtStyle): Promise<Engine> {
+    if (style === 'realistic' && this.opts.settings.engine === 'flux2-klein') {
+      const support = await this.fluxSupport();
+      if (support.ready) return { kind: 'flux2-klein' };
+      if (!this.opts.settings.checkpoint) {
+        throw new ImageUnavailableError(
+          `FLUX.2 [klein] unavailable: ${support.reason ?? 'not installed'}. ` +
+            'Install it (npm run setup:images -- --flux2-klein, recent ComfyUI) or choose SDXL in the settings',
+        );
+      }
+      this.log.info({ reason: support.reason }, 'FLUX.2 [klein] unavailable; using the SDXL checkpoint');
+    }
+    return { kind: 'sdxl', p: this.profile(style) };
+  }
+
+  /**
+   * Build the ComfyUI job of one picture (both engines). Runs the safety
+   * check on the final prompt: the strict one for FLUX.2, which has no
+   * negative prompt to push youth terms away.
+   */
+  private async pictureJob(
+    engine: Engine,
+    o: {
+      style: ArtStyle;
+      gender: Gender;
+      appearance: string;
+      scene: string;
+      seed: number;
+      width: number;
+      height: number;
+      /** Character whose reference face is used (none for editor previews). */
+      faceOf?: string | undefined;
+      /** SDXL extras: second hires pass, face detail pass (not for close-up portraits). */
+      hires: boolean;
+      detail: boolean;
+    },
+  ): Promise<{ job: RenderJob; prompt: string }> {
+    if (engine.kind === 'flux2-klein') {
+      const face = o.faceOf ? await this.fluxFaceReference(o.faceOf) : undefined;
+      const prompt = buildFlux2Prompt({
+        style: o.style,
+        gender: o.gender,
+        appearance: o.appearance,
+        scene: o.scene,
+        reference: face !== undefined,
+      });
+      assertSafeStrict(o.scene, prompt);
+      const workflow = buildFlux2Workflow({
+        positive: prompt,
+        seed: o.seed,
+        width: o.width,
+        height: o.height,
+        ...FLUX2_APP_SETTINGS,
+        referenceImage: face?.image,
+        referenceCrop: face?.crop,
+      });
+      return { job: { workflow }, prompt };
+    }
+    const { p } = engine;
+    const positive = buildPositivePrompt({
+      style: o.style,
+      gender: o.gender,
+      styleTags: p.style,
+      appearance: o.appearance,
+      scene: o.scene,
+    });
+    assertSafe(o.scene, positive);
+    const negative = buildNegativePrompt(o.style, p.negative);
+    const face = o.faceOf ? await this.faceReference(o.faceOf, p.faceWeight ?? 0) : undefined;
+    const workflow = buildTxt2ImgWorkflow({
+      checkpoint: p.checkpoint,
+      positive,
+      negative,
+      seed: o.seed,
+      width: o.width,
+      height: o.height,
+      steps: p.steps,
+      cfg: p.cfg,
+      sampler: p.sampler,
+      scheduler: p.scheduler,
+      hires: o.hires ? p.hires : undefined,
+      face,
+    });
+    return {
+      job: { workflow, detail: o.detail ? detailSettings(p, positive, negative, o.seed, face) : undefined },
+      prompt: positive,
+    };
   }
 
   /** Can pictures be generated right now? Realistic at the top level, anime under `anime`. */
@@ -189,6 +374,15 @@ export class ImageService {
     const comfy = await this.comfy.status();
     const check = async (style: ArtStyle): Promise<StyleStatus> => {
       const p = this.profileSettings(style);
+      let note: string | undefined;
+      if (style === 'realistic' && p?.engine === 'flux2-klein') {
+        if (!comfy.ok) return { available: false, reason: `ComfyUI not reachable (${comfy.error})` };
+        const flux = await this.fluxSupport();
+        // FLUX.2 takes her face as a reference picture: nothing else to install.
+        if (flux.ready) return { available: true, engine: 'flux2-klein', face: { ready: true } };
+        note = `FLUX.2 [klein] unavailable (${flux.reason}): using the SDXL checkpoint`;
+        if (!p.checkpoint) return { available: false, reason: `FLUX.2 [klein] unavailable: ${flux.reason}` };
+      }
       const checkpoint = p?.checkpoint;
       if (!checkpoint) {
         return {
@@ -209,14 +403,15 @@ export class ImageService {
         (p.faceWeight ?? 0) > 0
           ? await this.faceSupport()
           : { ready: false, reason: 'turned off in the settings (face strength 0)' };
-      return { available: true, checkpoint, face };
+      return { available: true, checkpoint, engine: 'sdxl', face, ...(note ? { note } : {}) };
     };
     return { ...(await check('realistic')), anime: await check('anime') };
   }
 
   /** Is an image model configured for this style? (cheap check, no network) */
   configured(style: ArtStyle = 'realistic'): boolean {
-    return Boolean(this.profileSettings(style)?.checkpoint);
+    const p = this.profileSettings(style);
+    return Boolean(p?.checkpoint) || (style === 'realistic' && p?.engine === 'flux2-klein');
   }
 
   /**
@@ -272,7 +467,8 @@ export class ImageService {
     if (!session) throw new Error(`Session ${sessionId} not found`);
     const character = this.characters.get(session.characterId);
     if (!character) throw new Error(`Character ${session.characterId} not found`);
-    const p = this.profile(character.artStyle);
+    // Fail fast (before the LLM call) when no model can draw her.
+    const engine = await this.engineFor(character.artStyle);
 
     // 1. Safety: the card must not describe a minor; the request must not ask for one.
     this.assertCharacterSafe(character, request);
@@ -289,65 +485,99 @@ export class ImageService {
     });
     signal?.throwIfAborted();
 
-    const positive = buildPositivePrompt({
+    // 3–4. Draw it, store it.
+    const stored = await this.drawAndStore(sessionId, character, engine, idea.scene, signal);
+    return { ...stored, caption: idea.caption };
+  }
+
+  /**
+   * Exclusive GPU phase for one photo of a scene, then store the file and
+   * its metadata row (never an orphan file). Shared by new photos and retakes.
+   */
+  private async drawAndStore(
+    sessionId: string,
+    character: Character,
+    engine: Engine,
+    scene: string,
+    signal?: AbortSignal,
+  ): Promise<{ id: string; path: string }> {
+    const seed = randomInt(0, 2 ** 47);
+    const base = this.profileSettings(character.artStyle) ?? this.opts.settings;
+    const { job, prompt } = await this.pictureJob(engine, {
       style: character.artStyle,
       gender: character.gender,
-      styleTags: p.style,
       appearance: character.appearance,
-      scene: idea.scene,
+      scene,
+      seed,
+      // Taller frame for full-body scenes (natural proportions).
+      ...frameForScene(scene, base.width, base.height),
+      faceOf: character.id,
+      hires: true,
+      detail: true,
     });
-    assertSafe(idea.scene, positive);
-    const seed = randomInt(0, 2 ** 47);
-    const face = await this.faceReference(character.id, p.faceWeight ?? 0);
+    const [png] = await this.runOnGpu([job], signal);
 
-    // 3. Exclusive GPU phase.
-    const [png] = await this.runOnGpu(
-      [
-        buildTxt2ImgWorkflow({
-          checkpoint: p.checkpoint,
-          positive,
-          negative: buildNegativePrompt(character.artStyle, p.negative),
-          seed,
-          width: p.width,
-          height: p.height,
-          steps: p.steps,
-          cfg: p.cfg,
-          sampler: p.sampler,
-          scheduler: p.scheduler,
-          hires: p.hires,
-          face,
-        }),
-      ],
-      signal,
-    );
-
-    // 4. Store file then metadata; never leave an orphan file behind.
     const id = randomUUID();
     const fileName = `${id}.png`;
     await mkdir(this.imagesDir, { recursive: true });
     const path = join(this.imagesDir, fileName);
     await writeFile(path, png!, { flag: 'wx' }); // 'wx': never overwrite
     try {
-      this.images.add({ id, sessionId, fileName, scene: idea.scene, prompt: positive, seed });
+      this.images.add({ id, sessionId, fileName, scene, prompt, seed });
     } catch (err) {
       await rm(path, { force: true });
       throw err;
     }
-    return { id, path, caption: idea.caption };
+    return { id, path };
   }
 
   /**
-   * The exclusive GPU phase: unload the LLM, run the workflows one after the
-   * other, then always give the VRAM back.
+   * Retake a photo: same scene, new seed, current model. The new picture
+   * replaces the old one in its message; the old file and row are deleted.
+   * The caller must hold the session lock and has checked that the message
+   * belongs to the session and shows this image.
+   * @returns the new image id
    */
-  private runOnGpu(workflows: ComfyWorkflow[], signal?: AbortSignal): Promise<Buffer[]> {
+  async retakePhoto(sessionId: string, messageId: string, imageId: string, signal?: AbortSignal): Promise<string> {
+    const old = this.images.get(imageId);
+    if (!old || old.sessionId !== sessionId) throw new Error(`Image ${imageId} not in session ${sessionId}`);
+    const session = this.sessions.get(sessionId);
+    const character = session ? this.characters.get(session.characterId) : undefined;
+    if (!character) throw new Error(`Character of session ${sessionId} not found`);
+    const engine = await this.engineFor(character.artStyle);
+    // The card may have changed since: check again, with the stored scene.
+    this.assertCharacterSafe(character, old.scene);
+
+    const { id, path } = await this.drawAndStore(sessionId, character, engine, old.scene, signal);
+    try {
+      this.sessions.setMessageImage(messageId, id);
+    } catch (err) {
+      this.images.delete(id);
+      await rm(path, { force: true });
+      throw err;
+    }
+    // The old picture is no longer shown anywhere: remove it (file best effort).
+    this.images.delete(old.id);
+    await this.deleteFiles([this.filePath(old)]);
+    return id;
+  }
+
+  /**
+   * The exclusive GPU phase: unload the LLM, render the pictures one after
+   * the other (each with its face detail pass), then always give the VRAM back.
+   */
+  private runOnGpu(jobs: RenderJob[], signal?: AbortSignal): Promise<Buffer[]> {
     return this.gate.runExclusive(async () => {
       await this.llm.unload?.().catch((err: unknown) => {
         this.log.warn({ err }, 'could not unload the LLM');
       });
       try {
         const images: Buffer[] = [];
-        for (const workflow of workflows) images.push(await this.comfy.generate(workflow, signal));
+        for (const job of jobs) {
+          const result = await renderPicture(this.comfy, this.detector, job, this.log, signal);
+          if (result.detail === 'done') this.log.info({}, 'face detail pass applied');
+          images.push(result.png);
+        }
         return images;
       } finally {
         // Give the VRAM back to the LLM even if generation failed.
@@ -364,34 +594,26 @@ export class ImageService {
    * The detail pass is skipped: these are previews.
    */
   async generatePortraits(subject: Subject, count: number, signal?: AbortSignal): Promise<Buffer[]> {
-    const p = this.profile(subject.artStyle);
+    const engine = await this.engineFor(subject.artStyle);
     if (!subject.appearance.trim()) throw new ImageUnavailableError('Describe the appearance first');
     assertSafe(subject.appearance);
-
-    const positive = buildPositivePrompt({
-      style: subject.artStyle,
-      gender: subject.gender,
-      styleTags: p.style,
-      appearance: subject.appearance,
-      scene: PORTRAIT_SCENE[subject.artStyle],
-    });
-    assertSafe(positive);
-    const negative = buildNegativePrompt(subject.artStyle, p.negative);
-    const workflows = Array.from({ length: count }, () =>
-      buildTxt2ImgWorkflow({
-        checkpoint: p.checkpoint,
-        positive,
-        negative,
+    // Close-ups (no detail pass), no reference face: this is how she gets one.
+    const jobs: RenderJob[] = [];
+    for (let i = 0; i < count; i++) {
+      const { job } = await this.pictureJob(engine, {
+        style: subject.artStyle,
+        gender: subject.gender,
+        appearance: subject.appearance,
+        scene: PORTRAIT_SCENE[subject.artStyle],
         seed: randomInt(0, 2 ** 47),
         width: 1024,
         height: 1024,
-        steps: p.steps,
-        cfg: p.cfg,
-        sampler: p.sampler,
-        scheduler: p.scheduler,
-      }),
-    );
-    return this.runOnGpu(workflows, signal);
+        hires: false,
+        detail: false,
+      });
+      jobs.push(job);
+    }
+    return this.runOnGpu(jobs, signal);
   }
 
   /**
@@ -401,7 +623,7 @@ export class ImageService {
   async generateBackgrounds(characterId: string, count: number, signal?: AbortSignal): Promise<Buffer[]> {
     const character = this.characters.get(characterId);
     if (!character) throw new Error(`Character ${characterId} not found`);
-    const p = this.profile(character.artStyle);
+    const engine = await this.engineFor(character.artStyle);
     this.assertCharacterSafe(character);
 
     const idea = await writePhotoIdea(this.llm, {
@@ -414,31 +636,23 @@ export class ImageService {
       now: (this.opts.now ?? (() => new Date()))(),
     });
     signal?.throwIfAborted();
-    const positive = buildPositivePrompt({
-      style: character.artStyle,
-      gender: character.gender,
-      styleTags: p.style,
-      appearance: character.appearance,
-      scene: idea.scene,
-    });
-    assertSafe(idea.scene, positive);
-    const negative = buildNegativePrompt(character.artStyle, p.negative);
-    const face = await this.faceReference(character.id, p.faceWeight ?? 0);
-    const workflows = Array.from({ length: count }, () =>
-      buildTxt2ImgWorkflow({
-        checkpoint: p.checkpoint,
-        positive,
-        negative,
+    const jobs: RenderJob[] = [];
+    for (let i = 0; i < count; i++) {
+      const { job } = await this.pictureJob(engine, {
+        style: character.artStyle,
+        gender: character.gender,
+        appearance: character.appearance,
+        scene: idea.scene,
         seed: randomInt(0, 2 ** 47),
         ...BACKGROUND_SIZE,
-        steps: p.steps,
-        cfg: p.cfg,
-        sampler: p.sampler,
-        scheduler: p.scheduler,
-        face,
-      }),
-    );
-    return this.runOnGpu(workflows, signal);
+        faceOf: character.id,
+        hires: false,
+        // Her face is small in a wide scene: redraw it (SDXL).
+        detail: true,
+      });
+      jobs.push(job);
+    }
+    return this.runOnGpu(jobs, signal);
   }
 
   /** Checkpoints installed in ComfyUI (undefined if ComfyUI is unreachable). */
@@ -474,6 +688,30 @@ export class ImageService {
       ),
     );
   }
+}
+
+/** Face detail pass settings for a picture, or undefined when it is turned off. */
+function detailSettings(
+  p: ImageSettings & { checkpoint: string },
+  positive: string,
+  negative: string,
+  seed: number,
+  face: FaceParams | undefined,
+): RenderJob['detail'] {
+  const denoise = p.detailStrength ?? 0;
+  if (denoise <= 0) return undefined;
+  return {
+    checkpoint: p.checkpoint,
+    positive,
+    negative,
+    seed,
+    steps: p.steps,
+    cfg: p.cfg,
+    sampler: p.sampler,
+    scheduler: p.scheduler,
+    denoise,
+    face,
+  };
 }
 
 export class ImageUnavailableError extends Error {
