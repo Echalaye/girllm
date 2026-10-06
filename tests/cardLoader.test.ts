@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -85,11 +85,14 @@ describe('loadCardFile / CharacterRepository', () => {
 
 describe('shipped character cards', () => {
   it('load with a fixed appearance that passes the image safety rules', async () => {
-    for (const file of ['characters/aria.json', 'characters/aria-fr.json']) {
-      const card = await loadCardFile(file);
-      expect(card.appearance.length).toBeGreaterThan(10);
-      expect(mentionsMinor(card.appearance)).toBe(false);
-      expect(cardStatesMinorAge(card.description)).toBe(false);
+    // Whatever cards the repository ships (they change over time), not a fixed list.
+    const files = (await readdir('characters')).filter((f) => /\.(json|png)$/i.test(f));
+    expect(files.length).toBeGreaterThan(0);
+    for (const file of files) {
+      const card = await loadCardFile(join('characters', file));
+      expect(card.appearance.length, file).toBeGreaterThan(10);
+      expect(mentionsMinor(card.appearance), file).toBe(false);
+      expect(cardStatesMinorAge(card.description), file).toBe(false);
     }
   });
 });

@@ -130,7 +130,7 @@ Nothing leaves your machine: the model runs on your GPU through [Ollama](https:/
 
 ### Human-like conversation (step 4b)
 
-- **Two writing styles** per character: `texting` (short, natural phone messages: Aria) or `roleplay` (narrative
+- **Two writing styles** per character: `texting` (short, natural phone messages) or `roleplay` (narrative
   with _actions_: the default for community cards).
 - **She knows what time it is**: day, hour, and how long since your last message. No more "good morning" at
   11 pm, and a three-day silence gets noticed.
@@ -313,7 +313,7 @@ Only download **`.gguf`** / **`.safetensors`** files, never pickle (`.bin`, `.pt
 ## Characters
 
 Create characters in the app (**New character**), import a `.json` / `.png` card from the sidebar, or drop card
-files into `characters/` and restart. An example card, **Aria**, is included.
+files into `characters/` and restart, or create one in the editor.
 
 Cards created or edited in the app are saved as `characters/<id>.json` (Character Card V2, SillyTavern-compatible).
 Editing a `.png` card (or a `.json` with another file name) saves the new `.json` and moves the original to
@@ -344,8 +344,7 @@ that states an age under 18.
 1. Set `REPLY_LANGUAGE=French` in `.env`. The instruction is added to the system prompt **and** repeated right
    before each reply, because small models tend to drift back to the card's language.
 2. For the most natural result, use a card **written in that language**. Models copy the language and style of the
-   greeting (`first_mes`) and the example dialogue. `characters/aria-fr.json` is a French version of Aria.
-   It shows up in the character list as a second "Aria".
+   greeting (`first_mes`) and the example dialogue.
 
 Mistral Nemo-based models (Mistral AI is French) and Qwen models handle French well. Llama 3.1 8B is weaker.
 

@@ -2,7 +2,9 @@
  * Compare chat models on the same realistic conversations, through girllm's
  * real prompt builder (character card, memories, time awareness, reminders).
  *
- *   npm run compare -- <model> [<model> …] [--character aria-fr] [--runs 2]
+ *   npm run compare -- <model> [<model> …] [--character magi] [--runs 2]
+ *
+ * Without --character, the first character of the list is used.
  *
  * Writes a Markdown report to DATA_DIR/model-comparison-<date>.md with every
  * reply, speed figures and automatic checks (language, length, assistant-isms,
@@ -30,7 +32,8 @@ interface Result {
 
 function parseArgs(argv: string[]) {
   const models: string[] = [];
-  let character = 'aria-fr';
+  /** Character id; undefined = the first one of the list. */
+  let character: string | undefined;
   let runs = 1;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
@@ -68,10 +71,10 @@ async function main(): Promise<void> {
       console.warn(m);
     },
   });
-  const character = characters.get(characterId);
+  const character = characterId ? characters.get(characterId) : characters.list()[0];
   if (!character)
     throw new Error(
-      `Character "${characterId}" not found (ids: ${characters
+      `Character "${characterId ?? '(any)'}" not found (ids: ${characters
         .list()
         .map((c) => c.id)
         .join(', ')})`,
