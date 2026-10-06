@@ -347,6 +347,19 @@
                 <option value="latest">Her latest photo in the chat</option>
               </select>
             </label>
+            <label class="field">
+              <span>Her scene, in your words <small class="muted">(optional)</small></span>
+              <textarea
+                name="backgroundScene"
+                rows="4"
+                maxlength="1000"
+                placeholder="e.g. In her art gallery in the afternoon: she stands next to a large abstract canvas, white walls, polished concrete floor, soft light from a tall window. Wide shot, she looks at the camera."
+              ></textarea>
+              <small class="muted"
+                >Used by "Generate 2 scenes". Describe the place, what she does, her outfit and the light. Leave empty
+                to let her imagine it from her card.</small
+              >
+            </label>
             <p class="small muted">Without a scene or a photo, her face is used.</p>
             <div id="bg-preview" class="bg-preview"><span class="muted small">No scene yet</span></div>
             <div class="face-actions">

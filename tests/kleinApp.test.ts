@@ -17,6 +17,7 @@ import { buildApp } from '../src/http/app.js';
 import { ComfyClient } from '../src/images/comfyClient.js';
 import { FLUX2_KLEIN_MODEL, FLUX2_KLEIN_TEXT_ENCODER, FLUX2_VAE } from '../src/images/flux2Workflow.js';
 import {
+  backgroundSceneFromUser,
   ImageService,
   ImageUnavailableError,
   type ImageServiceOptions,
@@ -94,7 +95,7 @@ async function setup(
     undefined,
     images,
   );
-  return { db, store, repo, comfy, chat, images, imageStore, faces };
+  return { db, store, repo, raw, comfy, chat, images, imageStore, faces };
 }
 
 const classes = (wf: Record<string, { class_type: string }>) => Object.values(wf).map((n) => n.class_type);
@@ -140,6 +141,30 @@ describe('realistic photos with FLUX.2 [klein]', () => {
     expect(wf['4']!.inputs.text).toContain('image 1');
     expect(String(wf['20']!.inputs.image)).toMatch(/^girllm_face_aria_/);
     expect(comfy.freed).toBe(1);
+  });
+
+  it('asks the chat model for a precise scene in sentences for FLUX.2, tags for SDXL', async () => {
+    const flux = await setup();
+    await flux.chat.sendPhoto(flux.chat.createSession('aria').session.id, '');
+    const asked = (env: Awaited<ReturnType<typeof setup>>) =>
+      env.raw.calls.find((c) => c[0]!.content.includes('about to send a photo'))![0]!.content;
+    expect(asked(flux)).toMatch(/4 to 6 short precise sentences/);
+    expect(asked(flux)).toMatch(/never a generic beach or landscape/);
+    expect(asked(flux)).not.toMatch(/comma-separated tags/);
+    const sdxl = await setup({ settings: { ...realistic, engine: 'sdxl' } });
+    await sdxl.chat.sendPhoto(sdxl.chat.createSession('aria').session.id, '');
+    expect(asked(sdxl)).toMatch(/comma-separated tags/);
+  });
+
+  it('keeps a long FLUX.2 scene description whole', async () => {
+    const scene =
+      'A photo taken by a friend a few metres away, full body, camera at chest height. She stands in the gallery, ' +
+      'one hand resting on a wooden easel, smiling softly at the camera. She wears a cream knit sweater and light ' +
+      'blue jeans. Behind her, large abstract canvases hang on white walls above a polished concrete floor. Soft ' +
+      'afternoon light comes from a tall window on the left.';
+    const { chat, comfy } = await setup({ photo: JSON.stringify({ caption: 'Ta-da', scene }) });
+    await chat.sendPhoto(chat.createSession('aria').session.id, '');
+    expect(comfy.queued[0]!.prompt['4']!.inputs.text).toContain(scene);
   });
 
   it('draws without a reference when she has no face yet', async () => {
@@ -305,5 +330,36 @@ describe('configuration', () => {
     expect(parseConfig({}).images.realisticEngine).toBe('flux2-klein');
     expect(parseConfig({ REALISTIC_ENGINE: 'sdxl' }).images.realisticEngine).toBe('sdxl');
     expect(() => parseConfig({ REALISTIC_ENGINE: 'dalle' })).toThrow();
+  });
+});
+
+describe('background scene written by the user', () => {
+  const scene = 'In her art gallery in the afternoon, next to a large abstract canvas, soft window light';
+
+  it('is drawn as written (no LLM call), framed as a wide shot', async () => {
+    const env = await setup({ characters: [makeCharacter({ first_mes: 'Hey', backgroundScene: scene })] });
+    await env.images.generateBackgrounds('aria', 2);
+    expect(env.raw.calls).toHaveLength(0);
+    expect(env.comfy.queued).toHaveLength(2);
+    const text = env.comfy.queued[0]!.prompt['4']!.inputs.text as string;
+    expect(text).toContain(`Scene: ${scene}. Wide shot, the setting clearly visible around them`);
+  });
+
+  it('keeps the framing the user chose, and goes through the safety checks', async () => {
+    expect(backgroundSceneFromUser('  Full body, on her balcony.  ')).toBe('Full body, on her balcony.');
+    expect(backgroundSceneFromUser('In her kitchen...')).toBe(
+      'In her kitchen. Wide shot, the setting clearly visible around them.',
+    );
+    const env = await setup({
+      characters: [makeCharacter({ first_mes: 'Hey', backgroundScene: 'on a playground with pigtails' })],
+    });
+    await expect(env.images.generateBackgrounds('aria', 1)).rejects.toThrow(ImageRefusedError);
+    expect(env.comfy.queued).toHaveLength(0);
+  });
+
+  it('falls back to the LLM when the field is empty', async () => {
+    const env = await setup();
+    await env.images.generateBackgrounds('aria', 1);
+    expect(env.raw.calls.length).toBeGreaterThan(0);
   });
 });

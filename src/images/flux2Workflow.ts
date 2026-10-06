@@ -1,7 +1,6 @@
 /**
- * FLUX.2 [klein] 4B (Black Forest Labs, Apache 2.0), image test bench only
- * for now (step 6b): it is compared with the SDXL models before any use in
- * the app.
+ * FLUX.2 [klein] 4B (Black Forest Labs, Apache 2.0): the default engine of
+ * realistic characters in the app (step 6b) and columns of the test bench.
  *
  * Unlike an SDXL checkpoint (one file), FLUX.2 comes as three files, each in
  * its own ComfyUI folder: the diffusion model, the Qwen3 4B text encoder and
@@ -11,13 +10,17 @@
  *   UNETLoader ─┐                           RandomNoise ─┐
  *   CLIPLoader ─► CLIPTextEncode ─► (+ ReferenceLatent: her face)
  *                      └► ConditioningZeroOut (negative)  ─► CFGGuider (cfg 1)
- *   EmptyFlux2LatentImage + Flux2Scheduler (4 steps) + KSamplerSelect (euler)
+ *   EmptyFlux2LatentImage + Flux2Scheduler (8 steps) + KSamplerSelect (euler)
  *     ─► SamplerCustomAdvanced ─► VAEDecode ─► SaveImage
+ *
+ * Then, when her face is small, a face pass (step 6c,
+ * buildFlux2FaceDetailWorkflow) redraws it at 1024 px from her reference
+ * face so wide shots show HER face, not a look-alike.
  *
  * The distilled model runs at CFG 1: the negative prompt is zeroed out and
  * has no effect. The "no minors" rule therefore relies on the adult terms
- * of the positive prompt and the code-side text check (safety.ts) alone,
- * which is one reason this stays in the bench until reviewed.
+ * of the positive prompt and the strict code-side text check
+ * (safety.ts assertSafeStrict).
  */
 import type { ArtStyle, Gender } from './artStyle.js';
 import type { CropBox } from './detailWorkflow.js';
@@ -318,30 +321,7 @@ export function buildFlux2Workflow(p: Flux2WorkflowParams): ComfyWorkflow {
     '7': { class_type: 'SaveImage', inputs: { filename_prefix: 'girllm_flux2', images: ['13', 0] } },
   };
 
-  if (p.referenceImage) {
-    // Her face as a reference picture (FLUX.2's built-in multi-reference),
-    // encoded once and attached to both conditionings, as in the official
-    // edit templates. Scaled to ~1 megapixel first.
-    workflow['20'] = { class_type: 'LoadImage', inputs: { image: p.referenceImage } };
-    let source: [string, number] = ['20', 0];
-    if (p.referenceCrop) {
-      const c = p.referenceCrop;
-      workflow['25'] = {
-        class_type: 'ImageCrop',
-        inputs: { image: ['20', 0], width: c.width, height: c.height, x: c.x, y: c.y },
-      };
-      source = ['25', 0];
-    }
-    workflow['21'] = {
-      class_type: 'ImageScaleToTotalPixels',
-      inputs: { image: source, upscale_method: 'lanczos', megapixels: 1, resolution_steps: 1 },
-    };
-    workflow['22'] = { class_type: 'VAEEncode', inputs: { pixels: ['21', 0], vae: ['3', 0] } };
-    workflow['23'] = { class_type: 'ReferenceLatent', inputs: { conditioning: ['4', 0], latent: ['22', 0] } };
-    workflow['24'] = { class_type: 'ReferenceLatent', inputs: { conditioning: ['5', 0], latent: ['22', 0] } };
-    workflow['11']!.inputs.positive = ['23', 0];
-    workflow['11']!.inputs.negative = ['24', 0];
-  }
+  if (p.referenceImage) attachFaceReference(workflow, p.referenceImage, p.referenceCrop);
 
   if (p.poseImage && p.referenceImage) {
     // Second reference, chained after her face (so it is "image 2"), ~1 MP.
@@ -356,5 +336,161 @@ export function buildFlux2Workflow(p: Flux2WorkflowParams): ComfyWorkflow {
     workflow['11']!.inputs.positive = ['53', 0];
     workflow['11']!.inputs.negative = ['54', 0];
   }
+  return workflow;
+}
+
+/**
+ * Her face as a reference picture (FLUX.2's built-in multi-reference),
+ * encoded once and attached to both conditionings (nodes 4 and 5), as in the
+ * official edit templates, then fed to the guider (node 11). Scaled to
+ * ~1 megapixel first. Node ids 20–25 (25 = crop, when given).
+ */
+function attachFaceReference(workflow: ComfyWorkflow, image: string, crop: CropBox | undefined): void {
+  workflow['20'] = { class_type: 'LoadImage', inputs: { image } };
+  let source: [string, number] = ['20', 0];
+  if (crop) {
+    workflow['25'] = {
+      class_type: 'ImageCrop',
+      inputs: { image: ['20', 0], width: crop.width, height: crop.height, x: crop.x, y: crop.y },
+    };
+    source = ['25', 0];
+  }
+  workflow['21'] = {
+    class_type: 'ImageScaleToTotalPixels',
+    inputs: { image: source, upscale_method: 'lanczos', megapixels: 1, resolution_steps: 1 },
+  };
+  workflow['22'] = { class_type: 'VAEEncode', inputs: { pixels: ['21', 0], vae: ['3', 0] } };
+  workflow['23'] = { class_type: 'ReferenceLatent', inputs: { conditioning: ['4', 0], latent: ['22', 0] } };
+  workflow['24'] = { class_type: 'ReferenceLatent', inputs: { conditioning: ['5', 0], latent: ['22', 0] } };
+  workflow['11']!.inputs.positive = ['23', 0];
+  workflow['11']!.inputs.negative = ['24', 0];
+}
+
+// ---------------------------------------------------------------------------
+// Face pass ("her face, not a look-alike"), step 6c
+// ---------------------------------------------------------------------------
+
+/**
+ * Settings of the FLUX.2 face pass. In a wide or full-body shot her face is
+ * ~100–200 px tall: too few pixels for the reference picture to carry her
+ * features, so FLUX.2 drew a look-alike (user report of 2026-10-06, park
+ * and gallery backgrounds). The pass crops around the face, redraws the
+ * crop at 1024 px with her face as reference, and pastes it back.
+ *
+ * Strength: the crop is re-noised to the sigma at `startStep` of a
+ * `steps`-step Flux2 schedule at 1024×1024, then sampled from there
+ * (`steps − startStep` steps). 16-step schedule at 1024²:
+ *   … 12 → 0.754 · 13 → 0.68 · 14 → 0.568 · 15 → 0.381 · 16 → 0.
+ * 0.754 changes the features enough to become her face, while the head
+ * angle, light and hair (low frequencies) stay those of the picture.
+ * Fixed on purpose (not the SDXL IMAGE_DETAIL_STRENGTH, whose scale
+ * means something else); 4 sampling steps ≈ 2–3 s on an 8 GB card.
+ */
+export const FLUX2_FACE_PASS = { steps: 16, startStep: 12 } as const;
+
+/** Size the face crop is redrawn at (square, a multiple of 16). */
+export const FLUX2_FACE_REDRAW_SIZE = 1024;
+
+/** What the face pass asks for (the crop is already the picture: keep it). */
+export const FLUX2_FACE_PASS_SCENE =
+  'Close-up of her face and hair, keeping exactly the head angle, expression, lighting, hair and background of ' +
+  'the picture';
+
+/**
+ * Prompt of the face pass: her look and the reference hint, a close-up
+ * scene. Pure function (exported for tests).
+ */
+export function buildFlux2FacePrompt(p: { style: ArtStyle; gender: Gender; appearance: string }): string {
+  const scene = p.gender === 'male' ? FLUX2_FACE_PASS_SCENE.replace(/\bher\b/g, 'his') : FLUX2_FACE_PASS_SCENE;
+  return buildFlux2Prompt({ ...p, scene, reference: true });
+}
+
+export interface Flux2FaceDetailParams {
+  /** The generated picture, uploaded to ComfyUI's input folder (LoadImage name). */
+  image: string;
+  /** Part of the picture to redraw (square, around the face). */
+  crop: CropBox;
+  positive: string;
+  seed: number;
+  /** Her reference face (uploaded) and the part of it to use. */
+  face: { image: string; crop?: CropBox | undefined };
+  /** Schedule length and first step (FLUX2_FACE_PASS). */
+  steps: number;
+  startStep: number;
+  files?: { model: string; textEncoder: string; vae: string };
+}
+
+/**
+ * Node ids: 1–5 and 9–13 as in buildFlux2Workflow · 20–25 reference face ·
+ * 30 load picture · 31 crop · 32 upscale · 33 encode · 8 scheduler ·
+ * 34 split (low sigmas = re-noise level onwards) · 35 scale back ·
+ * 36/37 feathered mask · 38 composite · 7 save.
+ */
+export function buildFlux2FaceDetailWorkflow(p: Flux2FaceDetailParams): ComfyWorkflow {
+  if (!(p.startStep >= 1 && p.startStep < p.steps)) {
+    throw new RangeError(`startStep must be between 1 and ${p.steps - 1}`);
+  }
+  const files = p.files ?? {
+    model: FLUX2_KLEIN_MODEL.file,
+    textEncoder: FLUX2_KLEIN_TEXT_ENCODER.file,
+    vae: FLUX2_VAE.file,
+  };
+  const { crop } = p;
+  const size = FLUX2_FACE_REDRAW_SIZE;
+  const feather = Math.round(crop.width * 0.12);
+  const workflow: ComfyWorkflow = {
+    '1': { class_type: 'UNETLoader', inputs: { unet_name: files.model, weight_dtype: 'default' } },
+    '2': { class_type: 'CLIPLoader', inputs: { clip_name: files.textEncoder, type: 'flux2', device: 'default' } },
+    '3': { class_type: 'VAELoader', inputs: { vae_name: files.vae } },
+    '4': { class_type: 'CLIPTextEncode', inputs: { text: p.positive, clip: ['2', 0] } },
+    '5': { class_type: 'ConditioningZeroOut', inputs: { conditioning: ['4', 0] } },
+    '30': { class_type: 'LoadImage', inputs: { image: p.image } },
+    '31': {
+      class_type: 'ImageCrop',
+      inputs: { image: ['30', 0], width: crop.width, height: crop.height, x: crop.x, y: crop.y },
+    },
+    '32': {
+      class_type: 'ImageScale',
+      inputs: { image: ['31', 0], upscale_method: 'lanczos', width: size, height: size, crop: 'disabled' },
+    },
+    '33': { class_type: 'VAEEncode', inputs: { pixels: ['32', 0], vae: ['3', 0] } },
+    '8': { class_type: 'Flux2Scheduler', inputs: { steps: p.steps, width: size, height: size } },
+    // Keep only the end of the schedule: the crop is re-noised to sigma[startStep].
+    '34': { class_type: 'SplitSigmas', inputs: { sigmas: ['8', 0], step: p.startStep } },
+    '9': { class_type: 'KSamplerSelect', inputs: { sampler_name: FLUX2_SAMPLER } },
+    '10': { class_type: 'RandomNoise', inputs: { noise_seed: p.seed } },
+    '11': {
+      class_type: 'CFGGuider',
+      inputs: { model: ['1', 0], positive: ['4', 0], negative: ['5', 0], cfg: 1 },
+    },
+    '12': {
+      class_type: 'SamplerCustomAdvanced',
+      inputs: { noise: ['10', 0], guider: ['11', 0], sampler: ['9', 0], sigmas: ['34', 1], latent_image: ['33', 0] },
+    },
+    '13': { class_type: 'VAEDecode', inputs: { samples: ['12', 0], vae: ['3', 0] } },
+    '35': {
+      class_type: 'ImageScale',
+      inputs: { image: ['13', 0], upscale_method: 'lanczos', width: crop.width, height: crop.height, crop: 'disabled' },
+    },
+    // A soft-edged mask so the redrawn square blends into the picture.
+    '36': { class_type: 'SolidMask', inputs: { value: 1, width: crop.width, height: crop.height } },
+    '37': {
+      class_type: 'FeatherMask',
+      inputs: { mask: ['36', 0], left: feather, top: feather, right: feather, bottom: feather },
+    },
+    '38': {
+      class_type: 'ImageCompositeMasked',
+      inputs: {
+        destination: ['30', 0],
+        source: ['35', 0],
+        x: crop.x,
+        y: crop.y,
+        resize_source: false,
+        mask: ['37', 0],
+      },
+    },
+    '7': { class_type: 'SaveImage', inputs: { filename_prefix: 'girllm_flux2_face', images: ['38', 0] } },
+  };
+  attachFaceReference(workflow, p.face.image, p.face.crop);
   return workflow;
 }

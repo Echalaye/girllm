@@ -158,6 +158,7 @@ export class CharacterRepository {
       artStyle: picture.artStyle,
       gender: picture.gender,
       background: picture.backgroundMode,
+      backgroundScene: picture.backgroundScene,
       // Imported lorebooks keep their entries (only the standard fields).
       lorebook: (card.character_book?.entries ?? [])
         .filter((e) => e.content.trim())
@@ -219,6 +220,8 @@ export class CharacterRepository {
     girllm.artStyle = input.artStyle;
     girllm.gender = input.gender;
     girllm.background = input.background;
+    if (input.backgroundScene) girllm.backgroundScene = input.backgroundScene;
+    else delete girllm.backgroundScene;
     extensions.girllm = girllm;
     // Keep the book's own settings (name, scan depth, budget…); entries come from the editor.
     const book = input.lorebook.length

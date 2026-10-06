@@ -10,7 +10,9 @@
  * anime, each with its own image profile (checkpoint, sampler, tags…).
  * Realistic characters are drawn by FLUX.2 [klein] 4B when it is installed
  * (step 6: natural bodies and hands, her face as a reference picture),
- * otherwise by the SDXL checkpoint. A photo can be retaken: same scene, new
+ * otherwise by the SDXL checkpoint. When her face is small in the picture,
+ * a face pass redraws it from her reference face (both engines). A photo
+ * can be retaken: same scene, new
  * seed, replacing the picture in its message.
  */
 import { createHash, randomInt, randomUUID } from 'node:crypto';
@@ -35,9 +37,11 @@ import { renderPicture, type RenderJob } from './renderPipeline.js';
 import type { RealisticEngine } from '../config.js';
 import type { CropBox } from './detailWorkflow.js';
 import {
+  buildFlux2FacePrompt,
   buildFlux2Prompt,
   buildFlux2Workflow,
   FLUX2_APP_SETTINGS,
+  FLUX2_FACE_PASS,
   FLUX2_KLEIN_MODEL,
   FLUX2_KLEIN_TEXT_ENCODER,
   FLUX2_VAE,
@@ -54,8 +58,9 @@ export const PORTRAIT_SCENE = {
 
 /** What the LLM is asked to imagine for a chat background (step 5). */
 export const BACKGROUND_REQUEST =
-  'A wide landscape picture of me in the place where my scenario happens (or my usual place): the setting is ' +
-  'clearly visible around me, relaxed pose, looking at the camera. Not a selfie.';
+  'A wide landscape picture of me in the place where my scenario happens, or else a place of my everyday life ' +
+  'from my description (where I work, live or spend my free time; not a generic beach or landscape): the setting ' +
+  'is clearly visible around me, relaxed natural pose, looking at the camera. Not a selfie.';
 
 /** Chat backgrounds are landscape (SDXL-friendly size). */
 const BACKGROUND_SIZE = { width: 1216, height: 832 } as const;
@@ -312,7 +317,7 @@ export class ImageService {
       height: number;
       /** Character whose reference face is used (none for editor previews). */
       faceOf?: string | undefined;
-      /** SDXL extras: second hires pass, face detail pass (not for close-up portraits). */
+      /** Extras: second hires pass (SDXL), face detail pass (both engines; not for close-up portraits). */
       hires: boolean;
       detail: boolean;
     },
@@ -336,7 +341,20 @@ export class ImageService {
         referenceImage: face?.image,
         referenceCrop: face?.crop,
       });
-      return { job: { workflow }, prompt };
+      // Face pass (step 6c): in a wide or full-body shot her face is too
+      // small for the reference to carry her features; redraw it at 1024 px
+      // from her face. Needs her face; IMAGE_DETAIL_STRENGTH=0 turns it off.
+      const detail: RenderJob['detail'] =
+        o.detail && face && (this.opts.settings.detailStrength ?? 0) > 0
+          ? {
+              kind: 'flux2',
+              positive: this.fluxFacePrompt(o),
+              seed: o.seed,
+              face,
+              ...FLUX2_FACE_PASS,
+            }
+          : undefined;
+      return { job: { workflow, detail }, prompt };
     }
     const { p } = engine;
     const positive = buildPositivePrompt({
@@ -367,6 +385,13 @@ export class ImageService {
       job: { workflow, detail: o.detail ? detailSettings(p, positive, negative, o.seed, face) : undefined },
       prompt: positive,
     };
+  }
+
+  /** Prompt of the FLUX.2 face pass, safety-checked like the picture's. */
+  private fluxFacePrompt(o: { style: ArtStyle; gender: Gender; appearance: string }): string {
+    const prompt = buildFlux2FacePrompt(o);
+    assertSafeStrict(prompt);
+    return prompt;
   }
 
   /** Can pictures be generated right now? Realistic at the top level, anime under `anime`. */
@@ -482,6 +507,7 @@ export class ImageService {
       request,
       language: this.opts.replyLanguage,
       now: (this.opts.now ?? (() => new Date()))(),
+      engine: engine.kind,
     });
     signal?.throwIfAborted();
 
@@ -626,15 +652,21 @@ export class ImageService {
     const engine = await this.engineFor(character.artStyle);
     this.assertCharacterSafe(character);
 
-    const idea = await writePhotoIdea(this.llm, {
-      character,
-      userName: this.opts.userName,
-      recent: [],
-      summary: '',
-      request: BACKGROUND_REQUEST,
-      language: this.opts.replyLanguage,
-      now: (this.opts.now ?? (() => new Date()))(),
-    });
+    // The user's own words when given (editor), else imagined by the LLM from her card.
+    const scene = character.backgroundScene
+      ? backgroundSceneFromUser(character.backgroundScene)
+      : (
+          await writePhotoIdea(this.llm, {
+            character,
+            userName: this.opts.userName,
+            recent: [],
+            summary: '',
+            request: BACKGROUND_REQUEST,
+            language: this.opts.replyLanguage,
+            now: (this.opts.now ?? (() => new Date()))(),
+            engine: engine.kind,
+          })
+        ).scene;
     signal?.throwIfAborted();
     const jobs: RenderJob[] = [];
     for (let i = 0; i < count; i++) {
@@ -642,7 +674,7 @@ export class ImageService {
         style: character.artStyle,
         gender: character.gender,
         appearance: character.appearance,
-        scene: idea.scene,
+        scene,
         seed: randomInt(0, 2 ** 47),
         ...BACKGROUND_SIZE,
         faceOf: character.id,
@@ -688,6 +720,18 @@ export class ImageService {
       ),
     );
   }
+}
+
+/**
+ * The user's background scene as given to the image model: their words, plus
+ * the framing the chat background needs (wide shot, setting visible) unless
+ * they already chose one. The safety checks run on it like on any scene.
+ */
+export function backgroundSceneFromUser(text: string): string {
+  const scene = text.trim().replace(/\s+/g, ' ');
+  return /\b(wide|full[\s-]?body|landscape)\b/i.test(scene)
+    ? scene
+    : `${scene.replace(/[.\s]+$/, '')}. Wide shot, the setting clearly visible around them.`;
 }
 
 /** Face detail pass settings for a picture, or undefined when it is turned off. */

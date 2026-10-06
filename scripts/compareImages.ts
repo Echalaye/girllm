@@ -39,10 +39,12 @@ import {
 import { ComfyClient } from '../src/images/comfyClient.js';
 import { FaceDetector, faceDetectorPath } from '../src/images/faceDetector.js';
 import {
-  buildFlux2Workflow,
+  buildFlux2FacePrompt,
   buildFlux2Prompt,
+  buildFlux2Workflow,
   flux2Variant,
   FLUX2_DEFAULT_VARIANTS,
+  FLUX2_FACE_PASS,
   FLUX2_KLEIN_BASE_MODEL,
   FLUX2_KLEIN_MODEL,
   FLUX2_KLEIN_TEXT_ENCODER,
@@ -326,6 +328,11 @@ async function main(): Promise<void> {
         assertSafe(text);
         return text;
       };
+      const fluxFacePositive = () => {
+        const text = buildFlux2FacePrompt({ style, gender, appearance });
+        assertSafe(text);
+        return text;
+      };
       const m = run.model;
       const base = `${run.shot.id}_${run.seed}_${run.modelIndex}`;
       process.stdout.write(`[${i + 1}/${runs.length}] ${run.shot.id} · ${m.checkpoint} … `);
@@ -335,7 +342,7 @@ async function main(): Promise<void> {
         const job: RenderJob =
           m.family === 'flux2'
             ? {
-                // No face detail pass: it is built on SDXL nodes. The bench shows whether FLUX.2 needs one.
+                // Same face pass as the app (step 6c) when her face is given.
                 workflow: buildFlux2Workflow({
                   positive: fluxPositive(fluxRef(m), fluxPose(m) !== undefined),
                   seed: run.seed,
@@ -356,6 +363,21 @@ async function main(): Promise<void> {
                     ? buildNegativePrompt(style, FLUX2_NEGATIVE)
                     : undefined,
                 }),
+                detail:
+                  fluxRef(m) && reference !== undefined && profile.detail > 0
+                    ? {
+                        kind: 'flux2',
+                        positive: fluxFacePositive(),
+                        seed: run.seed,
+                        face: { image: reference, crop },
+                        ...FLUX2_FACE_PASS,
+                        files: {
+                          model: flux2Variant(m.checkpoint)!.model.file,
+                          textEncoder: FLUX2_KLEIN_TEXT_ENCODER.file,
+                          vae: FLUX2_VAE.file,
+                        },
+                      }
+                    : undefined,
               }
             : {
                 workflow: buildTxt2ImgWorkflow({
@@ -397,7 +419,7 @@ async function main(): Promise<void> {
           writeFileSync(join(outDir, baseFile), result.base);
         }
         const detail =
-          m.family !== 'flux2'
+          m.family !== 'flux2' || result.detail !== 'off'
             ? result.detail
             : flux2Variant(m.checkpoint)?.pose
               ? fluxPose(m)

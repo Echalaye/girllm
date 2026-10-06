@@ -83,8 +83,29 @@ export function buildNegativePrompt(style: ArtStyle, profileNegative: string): s
     .join(', ');
 }
 
-/** How the LLM must write the "scene" for each style. */
-export function sceneInstructions(style: ArtStyle): string[] {
+/**
+ * How the LLM must write the "scene" for FLUX.2 [klein] (step 6): a precise
+ * description in sentences. Klein reads its prompt with a language model and
+ * fills every gap itself: from a short tag list it invented generic places
+ * (a beach for an art-gallery character), stiff front-facing poses and odd
+ * details (sand covered in footprints). Everything that matters is written.
+ */
+export const FLUX_SCENE_INSTRUCTIONS: readonly string[] = [
+  '"scene": the photo for a realistic image generator, in ENGLISH, as 4 to 6 short precise sentences, in this order:',
+  "  1. The shot: who takes it (selfie at arm's length, mirror selfie, photo taken by a friend a few metres away…),",
+  '     the framing (close-up, waist-up, full body) and the camera height/angle.',
+  '  2. What they are doing: one simple action, body position, where the hands are, facial expression, where they look.',
+  '  3. Their outfit for this moment: each garment with its colour and material.',
+  '  4. The place: a specific place from their life or the conversation (their home, their workplace, a place they',
+  '     mentioned), never a generic beach or landscape unless asked, with 3 or 4 concrete objects and where they are',
+  '     (foreground, background), and the ground or floor.',
+  '  5. The light: its source and direction, the time of day and the mood.',
+  '  Name each object once, describe only what is visible in this one photo, no other people unless asked.',
+];
+
+/** How the LLM must write the "scene" for each style (and image model). */
+export function sceneInstructions(style: ArtStyle, engine: 'flux2-klein' | 'sdxl' = 'sdxl'): string[] {
+  if (style === 'realistic' && engine === 'flux2-klein') return [...FLUX_SCENE_INSTRUCTIONS];
   return style === 'anime'
     ? [
         '"scene": the picture for an ANIME image generator, in ENGLISH, as 12-30 comma-separated Danbooru tags',

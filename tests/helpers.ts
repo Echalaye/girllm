@@ -29,6 +29,7 @@ export function makeCharacter(overrides: Partial<Character> = {}): Character {
     artStyle: 'realistic',
     gender: 'female',
     backgroundMode: 'scene',
+    backgroundScene: '',
     ...overrides,
   };
 }

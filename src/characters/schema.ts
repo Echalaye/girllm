@@ -103,6 +103,11 @@ export interface Character extends CardFields {
   gender: Gender;
   /** Chat background (`extensions.girllm.background`): her generated scene, or her latest photo. */
   backgroundMode: BackgroundMode;
+  /**
+   * The scene of her chat background, written by the user
+   * (`extensions.girllm.backgroundScene`); '' = imagined from her card.
+   */
+  backgroundScene: string;
   /** Where the card was loaded from — for logs only, never sent to clients. */
   sourceFile: string;
 }
@@ -162,13 +167,20 @@ export function characterFromCard(fields: CardFields, id: string, sourceFile: st
 /** girllm's picture settings of a card: art style, gender, chat background (validated, with defaults). */
 export function readPictureFields(
   extensions: Record<string, unknown>,
-): Pick<Character, 'artStyle' | 'gender' | 'backgroundMode'> {
+): Pick<Character, 'artStyle' | 'gender' | 'backgroundMode' | 'backgroundScene'> {
+  const girllm = extensions.girllm;
+  const scene =
+    girllm && typeof girllm === 'object' ? (girllm as { backgroundScene?: unknown }).backgroundScene : undefined;
   return {
     artStyle: readEnum(extensions, 'artStyle', ART_STYLES, 'realistic'),
     gender: readEnum(extensions, 'gender', GENDERS, 'female'),
     backgroundMode: readEnum(extensions, 'background', BACKGROUND_MODES, 'scene'),
+    backgroundScene: typeof scene === 'string' ? scene.trim().slice(0, MAX_BACKGROUND_SCENE_CHARS) : '',
   };
 }
+
+/** Max length of `extensions.girllm.backgroundScene`. */
+export const MAX_BACKGROUND_SCENE_CHARS = 1000;
 
 /** Max length of `extensions.girllm.appearance`. */
 export const MAX_APPEARANCE_CHARS = 500;
@@ -215,6 +227,8 @@ export const CharacterInputSchema = z.object({
   artStyle: z.enum(ART_STYLES).default('realistic'),
   gender: z.enum(GENDERS).default('female'),
   background: z.enum(BACKGROUND_MODES).default('scene'),
+  /** Her background scene in the user's words; '' = imagined from her card. */
+  backgroundScene: z.string().trim().max(MAX_BACKGROUND_SCENE_CHARS).default(''),
   lorebook: z.array(LoreInputSchema).max(200).default([]),
 });
 export type CharacterInput = z.infer<typeof CharacterInputSchema>;
@@ -238,6 +252,7 @@ export function toInput(c: Character): CharacterInput {
     artStyle: c.artStyle,
     gender: c.gender,
     background: c.backgroundMode,
+    backgroundScene: c.backgroundScene,
     lorebook: (c.character_book?.entries ?? []).map((e) => ({
       name: e.name ?? '',
       keys: e.keys,

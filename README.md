@@ -25,7 +25,16 @@ Nothing leaves your machine: the model runs on your GPU through [Ollama](https:/
   written in sentences, 8 steps. Used for chat photos, reference portraits and chat backgrounds of realistic
   characters; anime characters stay on Animagine. Until it is installed, the SDXL checkpoint is used. Settings →
   Photos → "Photo model". Because this model has no negative prompt, its prompts go through a **stricter safety
-  check** (young-look words like "pigtails" or "baby face" are refused on top of the usual rules).
+  check** (young-look words like "pigtails" or "baby face" are refused on top of the usual rules). The chat model
+  writes Klein a precise scene in 4–6 sentences (the shot, what she does, her outfit, a place from her life with
+  concrete objects, the light) instead of a short tag list: Klein invents whatever is missing (generic beaches,
+  stiff poses, odd details).
+- **Her face, even when small** (step 6c): in a wide or full-body Klein photo her face is ~100–200 px tall, too
+  small for the reference picture to carry her features, so Klein drew a look-alike. A face pass now finds the face,
+  redraws that square at 1024 px from her profile picture (the upper quarter of the schedule, sigma ~0.75: the
+  features become hers while the head angle, light and hair stay), and blends it back with soft edges. Chat photos,
+  retakes and chat backgrounds; close-ups are left alone. ~3 s more. Needs her face and the face detector; off when
+  "Face detail pass" is 0.
 - **Retake a photo**: the ↻ button on her photos draws the same scene again with a new picture and replaces it in
   the chat (the old one is deleted). Handy when a hand or a detail came out wrong.
 - **Face detail pass** (like "ADetailer"): in a waist-up or full-body photo the face is only ~150 px wide, too few
@@ -58,7 +67,8 @@ Nothing leaves your machine: the model runs on your GPU through [Ollama](https:/
 - **Her picture behind the chat**, softly blurred and dimmed so the text stays readable (Settings → Display: subtle,
   clear or off). Per character, in the editor:
   - **Her scene** (default): "Generate 2 scenes" makes a wide picture of her in her usual place, from her card, with
-    her reference face; pick the one you like.
+    her reference face; pick the one you like. To choose the scene yourself, write it in "Her scene, in your words"
+    (the place, what she does, her outfit, the light): it is drawn as written, as a wide shot.
   - **Her latest photo**: the background follows the last photo she sent in this chat.
   - Without a scene or a photo, her face is used.
 - Anime pictures always state an adult (`adult, mature female/male`) and carry extra youth-related negative tags:
@@ -494,7 +504,8 @@ mic ─► AudioWorklet (raw samples) ─► downsampled to 16 kHz ─► voice 
   ─► EXCLUSIVE GPU PHASE                          (other LLM calls wait, in every chat)
        unload the Ollama model ─► ComfyUI: FLUX.2 [klein] 8 steps (her face as a reference picture)
                                   or SDXL txt2img (+ IP-Adapter face)
-       ─► SDXL only: face detail pass: find the face (CPU) ─► small? redraw it at 1024 px, blend it back
+       ─► face detail pass: find the face (CPU) ─► small? redraw it at 1024 px, blend it back
+          (FLUX.2: from her profile picture, so it is HER face; SDXL: same prompt + IP-Adapter)
        ─► ComfyUI /free
   ─► PNG saved in data/images, "📷 request" + photo message added to the chat
   ↻ retake: same scene, new seed, the new picture replaces the old one in its message
@@ -592,8 +603,8 @@ npm run compare:images -- --style anime
   Its prompt is written in sentences (scene first) with its own photo style: the SDXL tag list and "smartphone photo" style made it draw a phone in most pictures.
   Her face is given as a reference picture, cropped to the face so that it doesn't copy the clothes and framing of
   her portrait. The distilled model **ignores negative prompts** (the adult terms of the prompt and the text safety
-  check still apply); the base model uses one: bad hands, extra fingers or limbs, and the youth terms. No face detail
-  pass for FLUX.2. ComfyUI's guide lists ~8.4 GB of VRAM for it: on an 8 GB card part of it is kept in RAM. If the
+  check still apply); the base model uses one: bad hands, extra fingers or limbs, and the youth terms. Klein columns
+  with her face get the app's FLUX.2 face pass ("face redrawn", with the "before" picture). ComfyUI's guide lists ~8.4 GB of VRAM for it: on an 8 GB card part of it is kept in RAM. If the
   bench says ComfyUI is too old, update ComfyUI (the portable build has `update\update_comfyui.bat`).
 
 - Open `data/compare-images/<date>/index.html`: one row per shot, one column per model, timing, and "before the face
@@ -641,6 +652,7 @@ each reply ─► prompt = character card
    and an image test bench to compare models
    - 6b ✅ FLUX.2 [klein] 4B: compared on the test bench, then the realistic photo model of the app, with a stricter
      safety check and a "retake" button on photos
+   - 6c ✅ FLUX.2 face pass: her small face redrawn from her profile picture in wide and full-body photos
 
 Ideas for later: a LoRA for an even more consistent face (especially for anime characters), voice cloning (option B: a Python XTTS service),
 interrupting her by talking during a call, and phone access through Tailscale.

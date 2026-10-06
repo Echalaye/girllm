@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { CharacterRepository } from '../src/characters/characterRepository.js';
 import { CharacterService } from '../src/characters/characterService.js';
 import { FaceStore } from '../src/characters/faceStore.js';
-import { CharacterInputSchema, type Character } from '../src/characters/schema.js';
+import { CharacterInputSchema, toInput, type Character } from '../src/characters/schema.js';
 import { ChatService } from '../src/chat/chatService.js';
 import { buildApp } from '../src/http/app.js';
 import {
@@ -216,6 +216,22 @@ describe('cards: art style, gender, background', () => {
     const reloaded = await CharacterRepository.loadFromDirectory(dir, silent);
     expect(reloaded.get('kai')).toMatchObject({ artStyle: 'anime', gender: 'male', backgroundMode: 'latest' });
     expect(() => CharacterInputSchema.parse({ name: 'X', artStyle: 'cartoon' })).toThrow();
+  });
+
+  it('round-trips the background scene written by the user, and drops it when cleared', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'girllm-cards-'));
+    const repo = await CharacterRepository.loadFromDirectory(dir, silent);
+    const input = { name: 'Ana', description: 'adult', backgroundScene: '  In her gallery, afternoon light  ' };
+    expect((await repo.save(CharacterInputSchema.parse(input))).backgroundScene).toBe(
+      'In her gallery, afternoon light',
+    );
+    let reloaded = await CharacterRepository.loadFromDirectory(dir, silent);
+    expect(reloaded.get('ana')?.backgroundScene).toBe('In her gallery, afternoon light');
+    expect(toInput(reloaded.get('ana')!).backgroundScene).toBe('In her gallery, afternoon light');
+    await reloaded.save(CharacterInputSchema.parse({ ...input, backgroundScene: '' }), 'ana');
+    reloaded = await CharacterRepository.loadFromDirectory(dir, silent);
+    expect(reloaded.get('ana')?.backgroundScene).toBe('');
+    expect(() => CharacterInputSchema.parse({ name: 'X', backgroundScene: 'x'.repeat(1001) })).toThrow();
   });
 });
 

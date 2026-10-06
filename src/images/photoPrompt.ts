@@ -29,10 +29,16 @@ export interface PhotoPromptInput {
   /** Current moment, so light and setting match the time of day. */
   now?: Date | undefined;
   timeZone?: string | undefined;
+  /**
+   * Image model that will draw it: FLUX.2 [klein] gets a precise description
+   * in sentences (it invents whatever is missing), SDXL a list of tags.
+   */
+  engine?: 'flux2-klein' | 'sdxl' | undefined;
 }
 
 const MAX_CAPTION_CHARS = 300;
-const MAX_SCENE_CHARS = 600;
+/** Tag lists (SDXL) stay short; FLUX.2 descriptions are a few sentences. */
+const MAX_SCENE_CHARS = 1200;
 /** Messages of context given to the model. */
 const CONTEXT_MESSAGES = 6;
 
@@ -62,7 +68,7 @@ export function buildPhotoPrompt(input: PhotoPromptInput) {
         `${c.name} (an adult) is chatting with ${user} and is about to send a photo of themselves.`,
         'Return ONLY a JSON object: {"caption": "...", "scene": "..."}.',
         `"caption": the short message ${c.name} writes with the photo, in their own voice, written in ${language}. One or two sentences; it may start with an *action*.`,
-        ...sceneInstructions(c.artStyle),
+        ...sceneInstructions(c.artStyle, input.engine),
         looks,
         'The light and setting MUST match the current time of day. Only one person in the photo.',
         'Make it consistent with the conversation, their life and the request: a natural, everyday photo between partners,',
@@ -102,7 +108,9 @@ export function parsePhotoIdea(raw: string): PhotoIdea | undefined {
 }
 
 export async function writePhotoIdea(llm: LlmProvider, input: PhotoPromptInput): Promise<PhotoIdea> {
-  const raw = await complete(llm, buildPhotoPrompt(input), { maxTokens: 300, temperature: 0.8, topP: 0.95 });
+  // A FLUX.2 description is several sentences: give it room.
+  const maxTokens = input.engine === 'flux2-klein' ? 600 : 300;
+  const raw = await complete(llm, buildPhotoPrompt(input), { maxTokens, temperature: 0.8, topP: 0.95 });
   const idea = parsePhotoIdea(raw);
   if (idea) return idea;
   // Fallback: still produce a photo rather than failing the request.

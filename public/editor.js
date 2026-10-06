@@ -151,6 +151,7 @@ export class CharacterEditor {
         this.form.querySelector(`input[name="${name}"][value="${data.card[name]}"]`).checked = true;
       }
       this.form.elements.namedItem('background').value = data.card.background;
+      this.form.elements.namedItem('backgroundScene').value = data.card.backgroundScene ?? '';
       this.#renderVoices(data.card.voice);
       this.#renderLore(data.card.lorebook ?? []);
       this.#renderStyleHints();
@@ -195,6 +196,7 @@ export class CharacterEditor {
     card.artStyle = checked('artStyle');
     card.gender = checked('gender');
     card.background = value('background');
+    card.backgroundScene = value('backgroundScene').trim();
     card.tags = value('tags')
       .split(',')
       .map((t) => t.trim())

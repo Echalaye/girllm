@@ -69,7 +69,7 @@ public/speech.js (sentence splitter)   ──► /api/tts ──► voice/sherpa
 | `src/images/comfyClient.ts`                           | `/prompt`, `/history` polling, `/view` (PNG check), `/free`, cancel on abort, `/object_info` status                                         |
 | `src/images/imageStore.ts`                            | Image metadata (file, scene, prompt, seed)                                                                                                  |
 | `src/images/imageService.ts`                          | Orchestration: safety → photo idea → exclusive GPU phase → store file and messages                                                          |
-| `src/images/renderPipeline.ts`                        | One picture end to end: generate, then the face detail pass when the face is small (shared with the test bench)                             |
+| `src/images/renderPipeline.ts`                        | One picture end to end: generate, then the face detail pass (SDXL or FLUX.2) when the face is small (shared with the test bench)            |
 | `src/images/faceDetector.ts`                          | UltraFace RFB-640 (ONNX, onnxruntime-web/WASM, CPU): letterbox → most confident face box; lazy-loaded                                       |
 | `src/images/detailWorkflow.ts`                        | Face crop planning (square, context ×2.2, skip close-ups) and the core-node redraw-and-blend ComfyUI graph                                  |
 | `src/images/presets.ts`                               | Recommended sampler/scheduler/steps/CFG per known checkpoint; optional downloads (Juggernaut XI)                                            |
@@ -358,9 +358,8 @@ with and without a pose guide). Pose guide (nodes 50–54): `LoadImage(data/pose
 can call them "image 1" (face) and "image 2" (pose, `FLUX2_POSE_HINT`); only used with a face reference. Tried and
 removed on 2026-10-05: a "correct hands" sentence, an "edit the hands" pass (Klein's edit mode returned a copy:
 mean pixel difference 3/255) and a 1.5× refine pass (same fingers, sharper). ComfyUI caches identical nodes, so
-bench columns sharing a first pass don't recompute it. The bench uses fixed seeds (`BENCH_SEEDS`, `chooseSeeds`). Not in the app yet, because:
-the distilled model ignores negative prompts (the youth negatives are one of the safety layers), there is no face
-detail pass for it, and its quality/speed on 8 GB must first be judged on the contact sheets.
+bench columns sharing a first pass don't recompute it. The bench uses fixed seeds (`BENCH_SEEDS`, `chooseSeeds`). Since 6b it is also the app's
+realistic engine (below); the missing negative prompt is covered by `assertSafeStrict`.
 
 **FLUX.2 [klein] in the app (6b).** `ImageSettings.engine` (`REALISTIC_ENGINE`, setting `realisticEngine`) chooses
 the model of realistic characters. `ImageService.engineFor(style)` returns FLUX.2 when it is chosen and
@@ -369,10 +368,33 @@ note in `/api/images/status`), else an `ImageUnavailableError` saying what to in
 builds one job for either engine: FLUX.2 gets `buildFlux2Prompt` (sentences) checked by `assertSafeStrict` (the
 usual minor terms plus young-look words: it has no negative prompt to push them away), her face uploaded once
 (content hash in the name) and cropped by the face detector (`fluxFaceReference`), and `FLUX2_APP_SETTINGS`
-(8 steps, CFG 1, Euler); SDXL keeps IP-Adapter, the hires pass and the face detail pass. Chat photos, retakes,
+(8 steps, CFG 1, Euler), plus the FLUX.2 face pass below; SDXL keeps IP-Adapter, the hires pass and the SDXL
+face detail pass. Chat photos, retakes,
 reference portraits (no face reference) and backgrounds all go through it.
+
+**FLUX.2 face pass (6c).** In wide and full-body shots her face is 100–200 px tall: the reference latent can't
+carry her features at that size and Klein drew a look-alike. `pictureJob` adds `detail: {kind: 'flux2', …}` when
+the job wants a face pass, her face is known and `detailStrength > 0`. `renderPicture` treats it like the SDXL pass
+(same detector, same `planFaceCrop` square ×2.2 and close-up skip, same `girllm_detail_source.png` upload) but
+builds `buildFlux2FaceDetailWorkflow`: `LoadImage` (30) → `ImageCrop` (31) → `ImageScale` 1024² (32) → `VAEEncode`
+(33); `Flux2Scheduler(16 steps, 1024²)` (8) → `SplitSigmas(step 12)` (34), the low half sampled by
+`SamplerCustomAdvanced` from the encoded crop (re-noised to sigma ≈ 0.754, 4 steps); prompt `buildFlux2FacePrompt`
+(close-up of her face, keep head angle/expression/light/hair/background, her appearance, "image 1" hint, strict
+safety check); her cropped profile picture as `ReferenceLatent` (20–25, shared helper `attachFaceReference`);
+`VAEDecode` → back to the crop size (35) → `SolidMask` + `FeatherMask` 12 % (36/37) → `ImageCompositeMasked` (38).
+Fixed strength `FLUX2_FACE_PASS`: the SDXL denoise scale does not map onto Flux sigmas. Same seed as the picture.
+The bench applies it to Klein columns that have her face.
 
 **Retake.** `ChatService.retakePhoto` (session lock, the image must be shown by a message of this chat) →
 `ImageService.retakePhoto`: same stored scene, new seed, current engine, `drawAndStore` (file then row), then the
 message points to the new image, and the old row and file are deleted. A failed retake changes nothing. In the
 page, the ↻ button on each photo calls the route and swaps the picture in place; Stop cancels it.
+
+**Scenes for FLUX.2.** `writePhotoIdea` receives the engine: for FLUX.2, `sceneInstructions('realistic', 'flux2-klein')`
+(`FLUX_SCENE_INSTRUCTIONS`) asks for 4–6 sentences in a fixed order (shot and framing, action/pose/expression, outfit,
+a specific place from her life with 3–4 objects and the floor, light), up to 1200 characters and 600 tokens; SDXL
+keeps the tag list. `BACKGROUND_REQUEST` asks for a place of her everyday life from her card, not a generic landscape.
+
+**Background scene in the user's words.** `extensions.girllm.backgroundScene` (≤ 1000 chars, editor field "Her scene,
+in your words"): when set, `generateBackgrounds` skips the LLM and draws it as written
+(`backgroundSceneFromUser` adds "Wide shot…" unless a framing is given), through the same safety checks.
