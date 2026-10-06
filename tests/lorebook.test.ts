@@ -80,19 +80,19 @@ describe('lorebook in the prompt and in cards', () => {
     expect(prompt.messages[0]?.content).toContain("[World info]\nAria's sister is Chloé.");
   });
 
-  it('saves voice and lorebook in the V2 card and loads them back', async () => {
+  it('saves the voice description and lorebook in the V2 card and loads them back', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'girllm-lore-'));
     const repo = await CharacterRepository.loadFromDirectory(dir, { info: () => {}, warn: () => {} });
     await repo.save(
       CharacterInputSchema.parse({
         name: 'Magi',
         description: '{{char}} is 23.',
-        voice: 'fr-jessica',
+        voiceDescription: 'Warm, slightly husky voice, calm',
         lorebook: [{ keys: ['Chloé'], content: 'Her sister.', constant: false }],
       }),
     );
     const raw = JSON.parse(await readFile(join(dir, 'magi.json'), 'utf8'));
-    expect(raw.data.extensions.girllm.voice).toBe('fr-jessica');
+    expect(raw.data.extensions.girllm.voiceDescription).toBe('Warm, slightly husky voice, calm');
     expect(raw.data.character_book.entries[0]).toMatchObject({
       keys: ['Chloé'],
       content: 'Her sister.',
@@ -101,11 +101,12 @@ describe('lorebook in the prompt and in cards', () => {
 
     const reloaded = await CharacterRepository.loadFromDirectory(dir, { info: () => {}, warn: () => {} });
     const magi = reloaded.get('magi')!;
-    expect(magi.voice).toBe('fr-jessica');
+    expect(magi.voiceDescription).toBe('Warm, slightly husky voice, calm');
     expect(magi.character_book?.entries).toHaveLength(1);
   });
 
-  it('rejects unknown voices', () => {
-    expect(() => CharacterInputSchema.parse({ name: 'X', voice: 'robot' })).toThrow();
+  it('limits the voice description to 500 characters', () => {
+    expect(() => CharacterInputSchema.parse({ name: 'X', voiceDescription: 'a'.repeat(501) })).toThrow();
+    expect(CharacterInputSchema.parse({ name: 'X', voiceDescription: '  calm  ' }).voiceDescription).toBe('calm');
   });
 });

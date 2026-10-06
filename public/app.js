@@ -5,14 +5,13 @@
 // CSP only allows scripts, styles, images and media from this origin.
 //
 // Modules: api.js (fetch/SSE helpers), settings.js (settings drawer),
-// editor.js (character editor), voice.js (push-to-talk + playback),
-// call.js + vad.js (hands-free call), speech.js (sentence splitter).
+// editor.js (character editor), voice.js (push-to-talk + playback of her
+// voice), call.js + vad.js (hands-free call).
 
 import { api, ApiError, confirmAction, el, ensureOk, readSse, store, wireDialog } from './api.js';
 import { CallSession, callSupported } from './call.js';
 import { CharacterEditor } from './editor.js';
 import { SettingsPanel } from './settings.js';
-import { SentenceSplitter } from './speech.js';
 import { micSupported, Recorder, Speaker } from './voice.js';
 
 const $ = (id) => document.getElementById(id);
@@ -48,6 +47,8 @@ const els = {
   memoryContent: $('memory-content'),
   memoryList: $('memory-list'),
   themeToggle: $('theme-toggle'),
+  conversation: document.querySelector('.conversation'),
+  chatBg: $('chat-bg'),
 };
 
 const state = {
@@ -62,11 +63,14 @@ const state = {
   controller: null,
   /** Read replies aloud (persisted per browser). */
   speakReplies: false,
-  photosAvailable: false,
-  /** Reference faces in photos: { ready, reason } from /api/images/status. */
-  faceSupport: undefined,
-  /** Voices for the character editor (from /api/voice). */
-  voices: [],
+  /** /api/images/status: realistic availability at the top level, anime under `.anime`. */
+  imageStatus: null,
+  /** Her picture behind the chat: 'subtle' | 'clear' | 'off' (a setting). */
+  chatBackground: 'subtle',
+  /** Cache-buster for face/background URLs after they change. */
+  pictureBust: '',
+  /** Her voice (/api/voice `tts`): { available, model, reason? } once known. */
+  ttsStatus: null,
   /** Running hands-free call, if any. */
   call: null,
   /** She writes first after this many minutes of silence (0 = never). */
@@ -85,17 +89,63 @@ const herName = () => current()?.name ?? '';
 // ------------------------------------------------------------- audio --
 
 const recorder = new Recorder();
-const speaker = new Speaker(async (text) => {
-  const res = await fetch('/api/tts', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    // Her own voice, if her card has one.
-    body: JSON.stringify({ text, characterId: state.characterId ?? undefined }),
+/**
+ * Her voice (step 7): each message is spoken whole by Qwen3-TTS on the GPU
+ * (a few seconds to prepare, instant when it was spoken before).
+ */
+const speaker = new Speaker(
+  async (text, signal) => {
+    if (!state.characterId) return null;
+    const res = await fetch('/api/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, characterId: state.characterId }),
+      signal,
+    });
+    if (res.status === 204) return null; // nothing speakable (only *actions*)
+    await ensureOk(res);
+    return res.blob();
+  },
+  {
+    onState: (s) => {
+      if (state.call) {
+        if (s === 'preparing') setCallState('paused', `${herName()} is about to answer…`);
+        else if (s === 'playing') setCallState('speaking', `${herName()} is talking`);
+        return;
+      }
+      if (state.controller) return; // typing / photo states win while a reply is running
+      setPortraitState(s === 'playing' ? 'speaking' : 'idle');
+      setPresence(s === 'preparing' ? 'recording a voice message…' : '');
+    },
+    onError: (err) => setStatus(`Her voice: ${err.message}`, true),
+  },
+);
+
+/**
+ * Read one of her messages aloud (🔊 button, "Voice on", calls). The button
+ * shows the progress; clicking it again while it plays stops her.
+ */
+function speakMessage(wrap) {
+  const text = wrap.dataset.text;
+  const button = wrap.querySelector('.speak');
+  if (!text || !button) return;
+  if (button.dataset.state) {
+    speaker.stop(); // second click: silence
+    return;
+  }
+  speaker.stop();
+  const setState = (value, label) => {
+    if (value) button.dataset.state = value;
+    else delete button.dataset.state;
+    button.setAttribute('aria-label', label);
+    button.title = label;
+  };
+  speaker.enqueue(text, {
+    onLoading: () => setState('loading', 'Preparing her voice… (click to cancel)'),
+    onPlay: () => setState('playing', 'Stop'),
+    onDone: () => setState('', 'Listen to this message'),
   });
-  if (res.status === 204) return null; // nothing speakable (only *actions*)
-  await ensureOk(res);
-  return res.blob();
-});
+}
 
 /** POST 16 kHz float32 samples to the local speech-to-text. */
 async function transcribe(samples) {
@@ -251,13 +301,44 @@ function addMessage(role, text, { pending = false, imageId = null } = {}) {
   renderText(body, text);
   if (imageId) wrap.append(photoElement(imageId));
   wrap.append(body);
+  if (role === 'assistant') {
+    // 🔊 her voice, on demand (shown when her voice is available, see initVoice).
+    const speak = el('button', 'speak', '🔊');
+    speak.type = 'button';
+    speak.title = 'Listen to this message';
+    speak.setAttribute('aria-label', speak.title);
+    speak.addEventListener('click', () => speakMessage(wrap));
+    wrap.append(speak);
+    setMessageText(wrap, text);
+  }
   els.messages.append(wrap);
   scrollToEnd();
   return { wrap, body };
 }
 
-/** A photo she sent: thumbnail in the bubble, click to open full size. */
+/** The raw text of her message (with *actions*: the server cleans it before speaking). */
+function setMessageText(wrap, text) {
+  if (text) wrap.dataset.text = text;
+  else delete wrap.dataset.text;
+}
+
+/**
+ * A photo she sent: thumbnail in the bubble, click to open full size, and a
+ * "retake" button (same scene, new picture) for when a detail went wrong.
+ */
 function photoElement(imageId) {
+  const frame = el('div', 'photo-frame');
+  frame.dataset.imageId = imageId;
+  const retake = el('button', 'retake', '↻');
+  retake.type = 'button';
+  retake.title = 'Retake this photo (same scene, new picture)';
+  retake.setAttribute('aria-label', 'Retake this photo');
+  retake.addEventListener('click', () => void retakePhoto(frame));
+  frame.append(photoLink(imageId), retake);
+  return frame;
+}
+
+function photoLink(imageId) {
   const url = `/api/images/${encodeURIComponent(imageId)}`;
   const link = el('a', 'photo-link');
   link.href = url;
@@ -284,10 +365,12 @@ function renderSession(session) {
   if (session.messages.length === 0) {
     els.messages.append(el('p', 'empty-chat', `Say hello to ${herName()}.`));
   }
+  updateBackground();
 }
 
 function setBusy(busy) {
   for (const node of [els.send, els.regenerate, els.mic, els.photo, els.call]) node.disabled = busy;
+  for (const b of els.messages.querySelectorAll('.retake')) b.disabled = busy;
   els.stop.hidden = !busy;
   els.send.hidden = busy;
 }
@@ -315,9 +398,8 @@ async function streamInto(path, payload, { speak = state.speakReplies, quiet = f
   };
   if (!quiet) ensureBubble();
   let text = '';
-  // Speak sentence by sentence while the reply is still being written.
+  // Her voice comes once the reply is complete (one GPU job per message).
   speaker.stop();
-  const splitter = speak ? new SentenceSplitter() : null;
 
   try {
     const res = await fetch(path, {
@@ -332,14 +414,16 @@ async function streamInto(path, payload, { speak = state.speakReplies, quiet = f
       if (event === 'token') {
         text += data.text;
         renderText(ensureBubble().body, text);
-        splitter?.push(data.text).forEach((sentence) => speaker.enqueue(sentence));
         scrollToEnd();
       } else if (event === 'error') {
         throw new Error(data.message);
       } else if (event === 'done') {
-        splitter?.flush().forEach((sentence) => speaker.enqueue(sentence));
         if (bubble && data.messageId) bubble.wrap.dataset.id = data.messageId;
-        if (bubble) bubble.wrap.classList.remove('pending');
+        if (bubble) {
+          bubble.wrap.classList.remove('pending');
+          setMessageText(bubble.wrap, text);
+          if (speak) speakMessage(bubble.wrap);
+        }
         state.lastMessageAt = Date.now();
         setStatus(data.droppedMessages ? `${data.droppedMessages} older messages no longer fit in her context` : '');
       } else if (event === 'photo_start') {
@@ -351,6 +435,7 @@ async function streamInto(path, payload, { speak = state.speakReplies, quiet = f
         b.wrap.classList.remove('photo-pending');
         b.wrap.classList.add('photo-msg');
         b.wrap.prepend(photoElement(data.imageId));
+        updateBackground(); // "latest photo" backgrounds follow
         if (document.hidden) notifyUnread();
       } else if (event === 'photo_error') {
         bubble?.wrap.classList.remove('photo-pending');
@@ -369,9 +454,8 @@ async function streamInto(path, payload, { speak = state.speakReplies, quiet = f
     }
     state.controller = null;
     setBusy(false);
-    setPresence('');
-    setPortraitState(speaker.busy ? 'speaking' : 'idle');
-    if (speaker.busy) void speaker.whenIdle().then(() => setPortraitState('idle'));
+    setPresence(speaker.state === 'preparing' ? 'recording a voice message…' : '');
+    setPortraitState(speaker.state === 'playing' ? 'speaking' : 'idle');
     if (!state.call) els.input.focus();
     void refreshSessionList(); // the title appears after the first message
   }
@@ -431,6 +515,7 @@ function showSession(session, character) {
   paintFace(els.portrait, current());
   setPresence('');
   renderCharacters();
+  updatePhotoButton();
   renderSession(session);
   // She writes first: the opening of an empty chat, or after a long silence.
   setTimeout(() => {
@@ -576,6 +661,41 @@ async function addMemory() {
  * Ask her for a photo. Text typed in the box becomes the request
  * ("a selfie at the beach"); empty = she decides.
  */
+/**
+ * Retake a photo: the server draws the same scene again with a new seed and
+ * replaces the picture in its message (the old one is deleted).
+ */
+async function retakePhoto(frame) {
+  if (!state.sessionId || state.controller) return;
+  const imageId = frame.dataset.imageId;
+  state.controller = new AbortController();
+  setBusy(true);
+  frame.classList.add('retaking');
+  const started = Date.now();
+  const tick = () => setPresence(`retaking the photo… ${Math.round((Date.now() - started) / 1000)} s`);
+  tick();
+  const timer = setInterval(tick, 1000);
+  try {
+    const res = await fetch(`/api/sessions/${state.sessionId}/images/${encodeURIComponent(imageId)}/retake`, {
+      method: 'POST',
+      signal: state.controller.signal,
+    });
+    await ensureOk(res);
+    const { message } = await res.json();
+    frame.replaceWith(photoElement(message.imageId));
+    updateBackground(); // "latest photo" backgrounds follow
+    setStatus('');
+  } catch (err) {
+    frame.classList.remove('retaking');
+    setStatus(err.name === 'AbortError' ? 'Retake cancelled' : err.message, err.name !== 'AbortError');
+  } finally {
+    clearInterval(timer);
+    state.controller = null;
+    setBusy(false);
+    setPresence('');
+  }
+}
+
 async function sendPhoto() {
   if (!state.sessionId || state.controller) return;
   const request = els.input.value.trim();
@@ -605,9 +725,10 @@ async function sendPhoto() {
     await ensureOk(res);
     const { message } = await res.json();
     bubble.wrap.remove();
-    addMessage('assistant', message.content, { imageId: message.imageId });
+    const sent = addMessage('assistant', message.content, { imageId: message.imageId });
     state.lastMessageAt = Date.now();
-    if (state.speakReplies) speaker.enqueue(message.content);
+    updateBackground();
+    if (state.speakReplies) speakMessage(sent.wrap);
     setStatus('');
   } catch (err) {
     bubble.wrap.remove();
@@ -628,13 +749,59 @@ async function sendPhoto() {
 /** Show the photo button unless photos are disabled in the config. */
 async function initPhotos() {
   const status = await api('/api/images/status').catch(() => null);
-  const disabled = !status || String(status.reason ?? '').startsWith('disabled');
-  state.photosAvailable = Boolean(status?.available);
-  state.faceSupport = status?.face;
-  els.photo.hidden = disabled;
-  els.photo.title = status?.available
+  state.imageStatus = status;
+  els.photo.hidden = !status || String(status.reason ?? '').startsWith('disabled');
+  updatePhotoButton();
+}
+
+/** Image availability for an art style: realistic at the top level, anime under `.anime`. */
+function styleStatus(artStyle = 'realistic') {
+  const status = state.imageStatus;
+  return artStyle === 'anime' ? status?.anime : status;
+}
+
+/** The 📷 button follows the current character's art style. */
+function updatePhotoButton() {
+  const st = styleStatus(current()?.artStyle);
+  els.photo.title = st?.available
     ? 'Ask for a photo (describe it in the box first, or leave it empty)'
-    : `Photos unavailable: ${status?.reason ?? 'unknown'}`;
+    : `Photos unavailable: ${st?.reason ?? 'unknown'}`;
+}
+
+// --------------------------------------------------- chat background --
+
+/**
+ * Her picture behind the chat (step 5). Source, per character:
+ *   "latest" → her latest photo in this chat, else her scene, else her face;
+ *   "scene"  → her generated scene, else her face.
+ * The look (subtle / clear / off) is a setting.
+ */
+function updateBackground() {
+  const c = current();
+  const layer = els.chatBg;
+  let url = '';
+  if (c && state.chatBackground !== 'off') {
+    const latest = c.background === 'latest' ? [...els.messages.querySelectorAll('img.photo')].at(-1) : null;
+    if (latest) url = latest.getAttribute('src');
+    else if (c.hasBackground) url = `/api/characters/${encodeURIComponent(c.id)}/background${state.pictureBust}`;
+    else if (c.hasFace) url = `/api/characters/${encodeURIComponent(c.id)}/face${state.pictureBust}`;
+  }
+  els.conversation.classList.toggle('has-bg', Boolean(url));
+  layer.dataset.look = state.chatBackground;
+  if (!url) {
+    layer.replaceChildren();
+    return;
+  }
+  // Only swap the image when the source changes (no flicker on re-renders).
+  if (layer.firstElementChild?.getAttribute('src') === url) return;
+  const img = el('img');
+  img.alt = '';
+  img.decoding = 'async';
+  img.src = url;
+  // Fade in once loaded; a missing file just leaves the plain background.
+  img.addEventListener('load', () => img.classList.add('loaded'), { once: true });
+  img.addEventListener('error', () => img.remove(), { once: true });
+  layer.replaceChildren(img);
 }
 
 // -------------------------------------------------------------- voice --
@@ -750,10 +917,8 @@ async function handleUtterance(audio) {
     setCallState('paused', `${herName()} is thinking…`);
     const reply = await sendText(text, { speak: true });
     if (!state.call) return;
-    if (reply) {
-      setCallState('speaking', `${herName()} is talking`);
-      await speaker.whenIdle();
-    }
+    // Her voice: prepared on the GPU, then played (the speaker updates the call screen).
+    if (reply) await speaker.whenIdle();
   } catch (err) {
     setStatus(err instanceof ApiError ? err.message : String(err), true);
   }
@@ -772,11 +937,21 @@ function endCall() {
   els.call.focus();
 }
 
-/** Show voice controls only for engines whose models are installed. */
+/** How often to look again for her voice while ComfyUI isn't ready (it often starts after girllm). */
+const VOICE_RETRY_MS = 30_000;
+let voiceRetry = null;
+
+/** Show voice controls only for engines that are installed and running. */
 async function initVoice() {
+  clearTimeout(voiceRetry);
   const voice = await api('/api/voice').catch(() => null);
   const ttsReady = Boolean(voice?.tts.available);
-  state.voices = voice?.voices ?? [];
+  state.ttsStatus = voice?.tts ?? null;
+  // 🔊 on her messages (CSS shows them only when her voice works).
+  els.messages.dataset.tts = ttsReady ? 'on' : 'off';
+  if (voice && !ttsReady && !/disabled/.test(voice.tts.reason ?? '')) {
+    voiceRetry = setTimeout(() => void initVoice(), VOICE_RETRY_MS);
+  }
   const sttReady = Boolean(voice?.stt.available);
   els.voiceToggle.hidden = !ttsReady;
   state.speakReplies = ttsReady && store.get('girllm.speakReplies') === '1';
@@ -814,14 +989,16 @@ const settingsPanel = new SettingsPanel({
   onSaved: (values) => {
     state.userName = values.userName;
     state.proactiveAfterMinutes = values.proactiveAfterMinutes;
+    state.chatBackground = values.chatBackground;
+    updateBackground();
     void initPhotos(); // the image model may have changed
   },
 });
 
 const editor = new CharacterEditor({
-  photosAvailable: () => state.photosAvailable,
-  faceSupport: () => state.faceSupport,
-  voices: () => state.voices,
+  photosAvailable: (artStyle) => Boolean(styleStatus(artStyle)?.available),
+  faceSupport: (artStyle) => styleStatus(artStyle)?.face,
+  voiceStatus: () => state.ttsStatus,
   onSaved: (summary) => {
     report(
       (async () => {
@@ -829,16 +1006,21 @@ const editor = new CharacterEditor({
         if (summary.id === state.characterId) {
           els.herName.textContent = summary.name;
           paintFace(els.portrait, current(), `?v=${Date.now()}`);
+          updatePhotoButton();
+          updateBackground(); // the background mode may have changed
           void refreshSessionList();
         }
       })(),
     );
   },
-  onFaceChanged: (id) => {
+  onPictureChanged: (id) => {
     report(
       (async () => {
         await loadCharacters();
-        if (id === state.characterId) paintFace(els.portrait, current(), `?v=${Date.now()}`);
+        if (id !== state.characterId) return;
+        state.pictureBust = `?v=${Date.now()}`; // a new face/scene has the same URL
+        paintFace(els.portrait, current(), state.pictureBust);
+        updateBackground();
       })(),
     );
   },
@@ -940,6 +1122,7 @@ async function init() {
     const [config, health] = await Promise.all([api('/api/config'), api('/api/health').catch(() => null)]);
     state.userName = config.userName;
     state.proactiveAfterMinutes = config.proactiveAfterMinutes ?? 0;
+    state.chatBackground = config.chatBackground ?? 'subtle';
     setInterval(proactiveTick, 60_000);
     $('open-memory').hidden = !config.memoryEnabled;
     await Promise.all([loadCharacters(), initVoice(), initPhotos()]);

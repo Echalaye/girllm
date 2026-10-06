@@ -1,6 +1,7 @@
 /**
  * Entry point: load config, wire dependencies, start the HTTP server.
  */
+import { existsSync } from 'node:fs';
 import { CharacterRepository } from './characters/characterRepository.js';
 import { CharacterService } from './characters/characterService.js';
 import { FaceStore } from './characters/faceStore.js';
@@ -13,11 +14,14 @@ import { createEmbeddingProvider, createLlmProvider } from './llm/createProvider
 import { MemoryService } from './memory/memoryService.js';
 import { MemoryStore } from './memory/memoryStore.js';
 import { defaultSummaryPolicy } from './memory/summarizer.js';
-import { SherpaSpeechToText, SherpaTextToSpeech } from './voice/sherpaVoice.js';
+import { SherpaSpeechToText } from './voice/sherpaVoice.js';
+import { SpeechService } from './voice/speechService.js';
+import { VoiceStore } from './voice/voiceStore.js';
 import type { VoiceServices } from './voice/types.js';
 import { ComfyClient } from './images/comfyClient.js';
 import { ImageService } from './images/imageService.js';
 import { ImageStore } from './images/imageStore.js';
+import { FaceDetector, faceDetectorPath } from './images/faceDetector.js';
 import { GatedEmbeddingProvider, GatedLlmProvider } from './llm/gated.js';
 import { GpuGate } from './util/gpuGate.js';
 import { defaultsFromConfig } from './settings/settingsSchema.js';
@@ -99,6 +103,7 @@ async function main(): Promise<void> {
 
   // Reference faces: avatars in the app, and IP-Adapter input for photos.
   const faces = new FaceStore(config.facesDir);
+  const backgrounds = new FaceStore(config.backgroundsDir);
 
   const { images: img } = config;
   const images = img.enabled
@@ -117,6 +122,7 @@ async function main(): Promise<void> {
             replyLanguage: language(),
             imagesDir: img.dir,
             settings: {
+              engine: s.realisticEngine,
               checkpoint: s.imageCheckpoint || undefined,
               width: img.width,
               height: img.height,
@@ -128,10 +134,28 @@ async function main(): Promise<void> {
               negative: s.imageNegative,
               hires: { scale: s.imageHiresScale, denoise: s.imageHiresDenoise, steps: s.imageHiresSteps },
               faceWeight: s.imageFaceWeight,
+              detailStrength: s.imageDetailStrength,
+            },
+            anime: {
+              checkpoint: s.animeCheckpoint || undefined,
+              width: img.width,
+              height: img.height,
+              steps: s.animeSteps,
+              cfg: s.animeCfg,
+              sampler: s.animeSampler,
+              scheduler: s.animeScheduler,
+              style: s.animeStyle,
+              negative: s.animeNegative,
+              // Same detail-pass strength/steps as realistic; only the scale differs.
+              hires: { scale: s.animeHiresScale, denoise: s.imageHiresDenoise, steps: s.imageHiresSteps },
+              faceWeight: s.animeFaceWeight,
+              detailStrength: s.animeDetailStrength,
             },
           };
         },
         faces,
+        // Face detail pass: the detector model is installed by setup:images.
+        new FaceDetector(faceDetectorPath(config.voice.modelsDir)),
       )
     : undefined;
 
@@ -157,12 +181,11 @@ async function main(): Promise<void> {
     images,
   );
 
-  // Character editor: deleting a character cascades to its chats, photos,
-  // memories and reference face.
-  const characterService = new CharacterService(characters, chat, sessions, memoryStore, faces);
-
   const { voice: v } = config;
-  const voice: VoiceServices | undefined = v.enabled
+  // Her voice (step 7): Qwen3-TTS in ComfyUI, sharing the GPU gate with the
+  // photos (its own client: a long reply takes longer than a photo).
+  const voices = v.enabled ? new VoiceStore(v.voicesDir) : undefined;
+  const voice: VoiceServices | undefined = voices
     ? {
         stt: new SherpaSpeechToText(() => ({
           modelsDir: v.modelsDir,
@@ -170,14 +193,22 @@ async function main(): Promise<void> {
           language: S().sttLanguage,
           numThreads: v.threads,
         })),
-        tts: new SherpaTextToSpeech(() => ({
-          modelsDir: v.modelsDir,
-          voice: S().ttsVoice,
-          speed: S().ttsSpeed,
-          numThreads: v.threads,
-        })),
+        tts: new SpeechService({
+          comfy: new ComfyClient({ baseUrl: img.comfyUrl, timeoutMs: 300_000 }),
+          gate: gpu,
+          llm,
+          characters,
+          voices,
+          cacheDir: v.speechCacheDir,
+          log: memoryLog,
+          options: () => ({ replyLanguage: language() }),
+        }),
       }
     : undefined;
+
+  // Character editor: deleting a character cascades to its chats, photos,
+  // memories, reference face, background and voice.
+  const characterService = new CharacterService(characters, chat, sessions, memoryStore, faces, backgrounds, voices);
 
   const app = await buildApp({
     chat,
@@ -189,8 +220,9 @@ async function main(): Promise<void> {
     images,
     characterService,
     faces,
+    backgrounds,
     settings,
-    voiceModelsDir: v.modelsDir,
+    voices,
     allowedHosts,
     userName: () => S().userName,
     logger: { level: process.env.LOG_LEVEL ?? 'info' },
@@ -228,7 +260,7 @@ async function main(): Promise<void> {
     const describe = (s: { available: boolean; model: string; reason?: string }) =>
       s.available ? s.model : `${s.model} — ${s.reason}`;
     app.log.info(
-      `Voice: speech-to-text ${describe(voice.stt.status())}, text-to-speech ${describe(voice.tts.status())}`,
+      `Voice: speech-to-text ${describe(voice.stt.status())}, her voice ${describe(await voice.tts.status())}`,
     );
   } else {
     app.log.info('Voice: off');
@@ -237,9 +269,24 @@ async function main(): Promise<void> {
   if (images) {
     const st = await images.status();
     if (st.available) {
-      app.log.info(`Photos: on (ComfyUI ${img.comfyUrl}, checkpoint ${st.checkpoint})`);
-      app.log.info(st.face?.ready ? 'Reference faces: on (IP-Adapter)' : `Reference faces: off — ${st.face?.reason}`);
+      if (st.engine === 'flux2-klein') {
+        app.log.info(`Photos: on (ComfyUI ${img.comfyUrl}, FLUX.2 [klein] 4B, her face as a reference picture)`);
+      } else {
+        app.log.info(`Photos: on (ComfyUI ${img.comfyUrl}, checkpoint ${st.checkpoint})`);
+        if (st.note) app.log.warn(st.note);
+        app.log.info(st.face?.ready ? 'Reference faces: on (IP-Adapter)' : `Reference faces: off — ${st.face?.reason}`);
+      }
+      app.log.info(
+        existsSync(faceDetectorPath(config.voice.modelsDir))
+          ? 'Face detail pass: on'
+          : 'Face detail pass: off — face detector not installed (run: npm run setup:images)',
+      );
     } else app.log.warn(`Photos: unavailable for now — ${st.reason}`);
+    app.log.info(
+      st.anime.available
+        ? `Anime photos: on (checkpoint ${st.anime.checkpoint})`
+        : `Anime photos: off — ${st.anime.reason}`,
+    );
     if (config.llm.provider !== 'ollama') {
       app.log.warn('Photos with LLM_PROVIDER=openai: the LLM cannot be unloaded automatically, VRAM may run out.');
     }

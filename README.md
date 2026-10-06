@@ -4,9 +4,11 @@ A **local, private AI companion / roleplay chat** that runs entirely on your own
 Nothing leaves your machine: the model runs on your GPU through [Ollama](https://ollama.com)
 (or any OpenAI-compatible server), and the app only listens on `127.0.0.1`.
 
-> **Status: step 4 done (4a–4d).** Streaming chat with characters, long-term memory, voice (push-to-talk or a
-> hands-free call), photos she sends with a consistent face, messages she writes first, lorebooks, a character
-> editor and settings you change from the app, all offline. See the [roadmap](#roadmap).
+> **Status: step 7 done.** Streaming chat with characters, long-term memory, her own designed voice (on demand,
+> push-to-talk or a hands-free call), photos she sends with a consistent face and detailed eyes, realistic or anime
+> characters, her picture behind the chat, messages she writes first, lorebooks, an image test bench, a character
+> editor and settings you change from the app, all offline.
+> See the [roadmap](#roadmap).
 
 [![CI](https://github.com/Echalaye/girllm/actions/workflows/ci.yml/badge.svg)](https://github.com/Echalaye/girllm/actions/workflows/ci.yml)
 ![node](https://img.shields.io/badge/Node-22%20%7C%2024-339933) ![ts](https://img.shields.io/badge/TypeScript-strict-3178c6)
@@ -14,6 +16,84 @@ Nothing leaves your machine: the model runs on your GPU through [Ollama](https:/
 ---
 
 ## Features
+
+### Her own voice (step 7)
+
+- **A voice made for her.** In the character editor ("Her voice"), describe how she sounds ("woman in her late
+  twenties, warm and slightly husky, calm, a little playful") and click **Create her voice**: Qwen3-TTS 1.7B makes
+  a short sample. Listen, keep it, or create another one (the last 3 stay on screen to compare). That sample becomes
+  her reference, and **every message she speaks is said with that exact voice** (voice cloning), so she always
+  sounds like the same person. A character without a voice gets one automatically the first time she speaks, from
+  her description or a natural default for her gender.
+- **🔊 on each of her messages**: click to hear it. The voice is made on the GPU like her photos (the chat model is
+  unloaded for a few seconds, then reloads for the next reply), so a message takes a while to prepare the first
+  time (estimated ~10–30 s); replaying it is instant (spoken messages are kept in `data/speech-cache/`, the
+  newest 300). Click again to stop her.
+- **Voice on** and **calls** now speak her whole reply once it is written (no longer sentence by sentence: each GPU
+  swap costs a few seconds). Expect a pause before she answers in a call.
+- **French and 9 other languages** (English, German, Spanish, Italian, Portuguese, Russian, Japanese, Korean,
+  Chinese), following the reply language in the settings.
+- **Adult voices only**: a description asking for a child's voice is refused, every designed voice is described as an
+  adult's, and a card stating an age under 18 gets no voice.
+- Install: `npm run setup:voice` (Whisper + Qwen3-TTS into ComfyUI, ~9 GB, see [Voice](#voice)). The Piper voices of
+  step 3 and their settings are gone; your speech is still transcribed by Whisper on the CPU.
+
+### Better photos and an image test bench (step 6)
+
+- **Realistic photos by FLUX.2 [klein] 4B** (default once installed: `npm run setup:images -- --flux2-klein`, recent
+  ComfyUI). It won every comparison on bodies, hands and framing, and is about 5× faster than the SDXL models
+  (~15 s per photo on an 8 GB card). Her face goes in as a reference picture (cropped to the face), the prompt is
+  written in sentences, 8 steps. Used for chat photos, reference portraits and chat backgrounds of realistic
+  characters; anime characters stay on Animagine. Until it is installed, the SDXL checkpoint is used. Settings →
+  Photos → "Photo model". Because this model has no negative prompt, its prompts go through a **stricter safety
+  check** (young-look words like "pigtails" or "baby face" are refused on top of the usual rules). The chat model
+  writes Klein a precise scene in 4–6 sentences (the shot, what she does, her outfit, a place from her life with
+  concrete objects, the light) instead of a short tag list: Klein invents whatever is missing (generic beaches,
+  stiff poses, odd details).
+- **Her face, even when small** (step 6c): in a wide or full-body Klein photo her face is ~100–200 px tall, too
+  small for the reference picture to carry her features, so Klein drew a look-alike. A face pass now finds the face,
+  redraws that square at 1024 px from her profile picture (the upper quarter of the schedule, sigma ~0.75: the
+  features become hers while the head angle, light and hair stay), and blends it back with soft edges. Chat photos,
+  retakes and chat backgrounds; close-ups are left alone. ~3 s more. Needs her face and the face detector; off when
+  "Face detail pass" is 0.
+- **Retake a photo**: the ↻ button on her photos draws the same scene again with a new picture and replaces it in
+  the chat (the old one is deleted). Handy when a hand or a detail came out wrong.
+- **Face detail pass** (like "ADetailer"): in a waist-up or full-body photo the face is only ~150 px wide, too few
+  pixels for SDXL to draw the eyes properly. girllm now finds the face (a 1.6 MB detector running on the CPU in
+  ~0.1 s), redraws that square at 1024 px with the same model, prompt and seed (and her reference face), then blends
+  it back with soft edges. Close-up portraits are left alone. Strength: Settings → "Face detail pass" (0.35 for
+  realistic, 0.3 for anime, 0 = off). It adds ~5–10 s per photo.
+- **More natural bodies**: full-body scenes are drawn in a taller frame (768×1344 instead of 832×1216, same speed),
+  and the default style no longer blurs the background (`shallow depth of field` made full bodies look fake), with
+  `natural body proportions` added and `overly muscular, unrealistic body proportions, elongated body, doll-like`
+  in the negative prompt.
+- **Juggernaut XI**, a second realistic model, better at full bodies and hands (`npm run setup:images --
+--juggernaut`, 7.1 GB, local like the others; licence CC BY-NC-ND 4.0: personal, non-commercial use).
+- **Recommended settings per model**: picking RealVisXL, Juggernaut or Animagine in Settings fills in its sampler,
+  scheduler, steps and CFG (click Save to apply).
+- **Image test bench**: `npm run compare:images` draws 10 test shots (portrait, selfie, mirror, desk, cup, standing,
+  sofa, outdoors, night, from behind) with the same seeds through each installed model, through the app's real
+  pipeline, and writes a contact sheet (`data/compare-images/<date>/index.html`) to compare them side by side, with
+  the picture before the face pass. See [Comparing image models](#comparing-image-models).
+- **FLUX.2 [klein] 4B in the test bench** (step 6b): compared with the SDXL models and with its own variants (steps,
+  base model, pose guide…) before it became the realistic photo model.
+
+### Realistic or anime, and her picture behind the chat (step 5)
+
+- **Drawn as Realistic photos or Anime**, per character (editor). Each style has its own image model and settings:
+  realistic uses your photo checkpoint (RealVisXL…), anime uses **Animagine XL 4.0** (`npm run setup:images --
+--anime`), with prompts written the way each model expects (photo words vs Danbooru tags, quality tags last for
+  anime). Settings → "Anime characters".
+- **Women and men**: "In pictures: Woman / Man" in the editor (`1girl`/`1boy`, woman/man).
+- **Her picture behind the chat**, softly blurred and dimmed so the text stays readable (Settings → Display: subtle,
+  clear or off). Per character, in the editor:
+  - **Her scene** (default): "Generate 2 scenes" makes a wide picture of her in her usual place, from her card, with
+    her reference face; pick the one you like. To choose the scene yourself, write it in "Her scene, in your words"
+    (the place, what she does, her outfit, the light): it is drawn as written, as a wide shot.
+  - **Her latest photo**: the background follows the last photo she sent in this chat.
+  - Without a scene or a photo, her face is used.
+- Anime pictures always state an adult (`adult, mature female/male`) and carry extra youth-related negative tags:
+  anime models tend to draw characters young-looking.
 
 ### She lives a little more (step 4d)
 
@@ -25,15 +105,16 @@ Nothing leaves your machine: the model runs on your GPU through [Ollama](https:/
   in character. Frequency: `PHOTO_FREQUENCY` = `off`, `rare` (default) or `often`. The 📷 button still works.
 - **The same face in every photo.** The reference face chosen in the editor is applied to her photos with
   IP-Adapter Plus Face (`npm run setup:images`, once). Strength: `IMAGE_FACE_WEIGHT` (0.7 by default, 0 = off).
-- **Her own voice.** Each character can have her own voice (character editor); otherwise the one from the settings.
+- **Her own voice.** Each character can have her own voice (character editor). Since step 7 it is designed from a
+  description, see [Her own voice](#her-own-voice-step-7).
 - **Lorebooks.** Background facts (family, job, places, shared memories) with keywords: an entry is added to her
   notes only when the conversation mentions it, so long backstories cost nothing until they matter. Compatible with
   SillyTavern `character_book`.
 
 ### In the app (step 4c)
 
-- **Settings panel** (gear icon, bottom left): your name, reply language, chat model, creativity, her voice and
-  speaking speed, the image model and its parameters. Changes apply to the next message, no restart. `.env` still
+- **Settings panel** (gear icon, bottom left): your name, reply language, chat model, creativity, the language you
+  speak, the image model and its parameters. Changes apply to the next message, no restart. `.env` still
   holds the defaults; "Restore .env values" goes back to them.
 - **Character editor** (pencil icon, or "New character"): name, how she writes (text messages or roleplay), who she
   is, personality, situation, first message, appearance in photos, plus the advanced card fields. "Import a card"
@@ -43,13 +124,13 @@ Nothing leaves your machine: the model runs on your GPU through [Ollama](https:/
   is AI-generated, of yourself, or of an adult who agreed. Uploads are re-written without their metadata (EXIF, GPS,
   text). The face is her avatar, and step 4d keeps it in her photos.
 - **Hands-free call** (phone icon): talk naturally, she hears when you stop, answers out loud, then listens again.
-  Needs both voice engines installed (`npm run setup:voice`).
+  Needs both voice engines installed (`npm run setup:voice`) and ComfyUI running (her voice, step 7).
 - **New interface**: sidebar with characters and chats, her portrait in the header, light and dark themes,
   keyboard- and screen-reader-friendly, usable on a phone-sized window.
 
 ### Human-like conversation (step 4b)
 
-- **Two writing styles** per character: `texting` (short, natural phone messages: Aria) or `roleplay` (narrative
+- **Two writing styles** per character: `texting` (short, natural phone messages) or `roleplay` (narrative
   with _actions_: the default for community cards).
 - **She knows what time it is**: day, hour, and how long since your last message. No more "good morning" at
   11 pm, and a three-day silence gets noticed.
@@ -71,11 +152,10 @@ Nothing leaves your machine: the model runs on your GPU through [Ollama](https:/
 ### Voice (step 3)
 
 - **Talk instead of typing**: click 🎤, speak, click Stop. Your voice is transcribed locally by Whisper and sent.
-- **Hear her answer** (🔊 Voice on): replies are spoken **sentence by sentence while they're being written**, so she
-  starts talking within a second or two. Stage directions like `*smiles*` are not read aloud.
+- **Hear her answer** (Voice on): stage directions like `*smiles*` are not read aloud. Since step 7 her voice is
+  Qwen3-TTS on the GPU (see [Her own voice](#her-own-voice-step-7)); step 3 used Piper voices on the CPU.
 - Talking (or pressing Stop) interrupts her, like a real conversation.
-- Several French voices (female and male) plus English. Everything runs **on the CPU**, so the GPU stays free for the
-  LLM, and no audio ever leaves your PC.
+- Speech recognition runs **on the CPU**, and no audio ever leaves your PC.
 
 ### Memory (step 2)
 
@@ -136,7 +216,7 @@ ollama pull paraphrase-multilingual     # embedding model for memory search (~0.
 cd C:\Users\etien\Desktop\girllm
 npm install
 copy .env.example .env      # then edit USER_NAME, model, etc.
-npm run setup:voice         # optional: downloads the voice models (~265 MB, checksum-verified)
+npm run setup:voice         # optional: Whisper (~200 MB) + her voice, Qwen3-TTS in ComfyUI (~9 GB; needs COMFYUI_DIR)
 npm run dev                 # hot reload, or: npm run build ; npm start
 ```
 
@@ -167,11 +247,21 @@ Open **http://127.0.0.1:3210**.
 5. **Optional, recommended: the same face in every photo.** With `COMFYUI_DIR` set, run once:
 
    ```powershell
-   npm run setup:images   # IP-Adapter nodes (pinned commit) + 2 models (~3.4 GB, checksum-verified)
+   npm run setup:images            # IP-Adapter nodes (pinned commit) + 2 models (~3.4 GB, checksum-verified)
+   npm run setup:images -- --anime # the same + Animagine XL 4.0 for anime characters (+6.9 GB)
+   npm run setup:images -- --juggernaut  # the same + Juggernaut XI, a second realistic model (+7.1 GB)
+   npm run setup:images -- --flux2-klein # the same + FLUX.2 [klein] 4B, for the test bench (+12.5 GB)
+   npm run setup:images -- --flux2-klein-base # + its undistilled model, slower, with a negative prompt (+4.1 GB)
    ```
 
-   Restart ComfyUI. The startup log should say `Reference faces: on (IP-Adapter)`. Then give each character a
-   reference face in the editor (generated or uploaded).
+   It also installs the small face detector used by the face detail pass (1.6 MB, into `MODELS_DIR`). Flags can
+   be combined (`-- --anime --juggernaut`).
+
+   Restart ComfyUI. The startup log should say `Reference faces: on (IP-Adapter)` (and `Anime photos: on`). Then
+   give each character a reference face in the editor (generated or uploaded).
+
+   Going from a realistic character to an anime one makes ComfyUI load the other model: the first picture after the
+   switch takes 10–20 s longer.
 
 A photo typically takes 20–40 s on an 8 GB card, mostly spent swapping models between the LLM and SDXL. The
 first one is slower because ComfyUI loads the checkpoint from disk. The reference face adds a few seconds.
@@ -223,7 +313,7 @@ Only download **`.gguf`** / **`.safetensors`** files, never pickle (`.bin`, `.pt
 ## Characters
 
 Create characters in the app (**New character**), import a `.json` / `.png` card from the sidebar, or drop card
-files into `characters/` and restart. An example card, **Aria**, is included.
+files into `characters/` and restart, or create one in the editor.
 
 Cards created or edited in the app are saved as `characters/<id>.json` (Character Card V2, SillyTavern-compatible).
 Editing a `.png` card (or a `.json` with another file name) saves the new `.json` and moves the original to
@@ -240,6 +330,10 @@ Your name comes from `USER_NAME` in `.env`.
 | `first_mes`                              | Greeting that opens every new chat                                                                                                                                                                                           |
 | `post_history_instructions`              | Reminder added at the end of the system prompt (strong steering)                                                                                                                                                             |
 | `extensions.girllm.style`                | `"texting"` (short natural messages) or `"roleplay"` (narrative, default). Ignored if the card has its own `system_prompt`                                                                                                   |
+| `extensions.girllm.artStyle`             | `"realistic"` (default) or `"anime"`: which image model and prompt conventions draw her                                                                                                                                      |
+| `extensions.girllm.gender`               | `"female"` (default) or `"male"`: `1girl`/`1boy`, woman/man in pictures                                                                                                                                                      |
+| `extensions.girllm.background`           | `"scene"` (default: her generated scene) or `"latest"` (her latest photo in the chat) behind the chat                                                                                                                        |
+| `extensions.girllm.voiceDescription`     | What her voice sounds like (≤ 500 chars), used to design it (step 7). The voice itself is a clip in `data/voices/`, not in the card. The step 3 field `voice` is dropped when the card is saved                              |
 | `extensions.girllm.appearance`           | Fixed look used for **every photo** (image-prompt tags): `"woman, 26 years old, shoulder-length wavy auburn hair, green eyes, …"`. Without it, the LLM improvises the look from the description, which varies between photos |
 
 All characters must be adults. The default system prompt states it explicitly, and photos are refused for a card
@@ -250,8 +344,7 @@ that states an age under 18.
 1. Set `REPLY_LANGUAGE=French` in `.env`. The instruction is added to the system prompt **and** repeated right
    before each reply, because small models tend to drift back to the card's language.
 2. For the most natural result, use a card **written in that language**. Models copy the language and style of the
-   greeting (`first_mes`) and the example dialogue. `characters/aria-fr.json` is a French version of Aria.
-   It shows up in the character list as a second "Aria".
+   greeting (`first_mes`) and the example dialogue.
 
 Mistral Nemo-based models (Mistral AI is French) and Qwen models handle French well. Llama 3.1 8B is weaker.
 
@@ -259,51 +352,60 @@ Mistral Nemo-based models (Mistral AI is French) and Qwen models handle French w
 
 ## Configuration (`.env`)
 
-| Variable                                    | Default                                 | Description                                                                                                                     |
-| ------------------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `HOST`                                      | `127.0.0.1`                             | Keep loopback: the API has **no authentication**                                                                                |
-| `PORT`                                      | `3210`                                  |                                                                                                                                 |
-| `LLM_PROVIDER`                              | `ollama`                                | `ollama` = native Ollama API (recommended). `openai` = any OpenAI-compatible server (llama.cpp, KoboldCpp, LM Studio)           |
-| `LLM_BASE_URL`                              | `http://127.0.0.1:11434`                | Base URL **without** `/v1`                                                                                                      |
-| `LLM_KEEP_ALIVE`                            | `30m`                                   | How long Ollama keeps the model in VRAM after the last request (`2h`, `-1` = forever)                                           |
-| `LLM_MODEL`                                 | `mistral-nemo:12b-instruct-2407-q4_K_M` | Model name as known by the backend                                                                                              |
-| `LLM_API_KEY`                               | _(empty)_                               | Only for backends requiring one                                                                                                 |
-| `CONTEXT_TOKENS`                            | `8192`                                  | Context window. Applied automatically with `ollama`; with `openai` it must match the backend                                    |
-| `MAX_REPLY_TOKENS`                          | `400`                                   | Max reply length                                                                                                                |
-| `TEMPERATURE` / `TOP_P`                     | `0.7` / `0.95`                          | Sampling. Lower temperature = more coherent                                                                                     |
-| `MIN_P`                                     | `0.05`                                  | Drops very unlikely tokens: the best guard against incoherent tangents                                                          |
-| `REPEAT_PENALTY`                            | `1.1`                                   | `>1` discourages repetition                                                                                                     |
-| `CHARACTERS_DIR`                            | `./characters`                          |                                                                                                                                 |
-| `USER_NAME`                                 | `User`                                  | Your name in the story                                                                                                          |
-| `REPLY_LANGUAGE`                            | _(empty)_                               | Force the reply language, e.g. `French`. Letters only. Empty = no constraint                                                    |
-| `DATA_DIR`                                  | `./data`                                | Where `girllm.db` (chats, memories, settings), `images/` and `faces/` are stored. Git-ignored                                   |
-| `MEMORY_ENABLED`                            | `true`                                  | `false` = step 1 behaviour (chats are still saved)                                                                              |
-| `EMBEDDING_MODEL`                           | `paraphrase-multilingual`               | Embedding model for memory search. Empty = memories picked by recency only                                                      |
-| `EMBEDDING_BASE_URL`                        | = `LLM_BASE_URL`                        | Backend serving the embedding model                                                                                             |
-| `MEMORY_TOP_K`                              | `8`                                     | Max memories injected per reply                                                                                                 |
-| `MEMORY_EXTRACT_EVERY`                      | `4`                                     | Facts are extracted once this many new messages are pending                                                                     |
-| `VOICE_ENABLED`                             | `true`                                  | Voice buttons only appear for the models that are installed                                                                     |
-| `MODELS_DIR`                                | `./models`                              | Where `npm run setup:voice` puts the voice models. Git-ignored                                                                  |
-| `STT_MODEL`                                 | `whisper-base`                          | `whisper-tiny`, `whisper-base`, `whisper-small` (more accurate, ~3× slower)                                                     |
-| `STT_LANGUAGE`                              | _(empty = auto)_                        | The language you speak, e.g. `fr`. Setting it avoids misdetections on short sentences                                           |
-| `TTS_VOICE`                                 | `fr-siwis`                              | `fr-siwis`, `fr-jessica` (female), `fr-pierre`, `fr-tom` (male), `en-amy`                                                       |
-| `TTS_SPEED`                                 | `1`                                     | `0.5`–`2`                                                                                                                       |
-| `VOICE_THREADS`                             | `4`                                     | CPU threads per voice engine                                                                                                    |
-| `IMAGES_ENABLED`                            | `true`                                  | Shows the 📷 button (it explains why if ComfyUI isn't ready)                                                                    |
-| `COMFYUI_DIR`                               | _(empty)_                               | ComfyUI install folder, so `start.bat` can start it. Only used by the launcher                                                  |
-| `COMFYUI_URL`                               | `http://127.0.0.1:8188`                 |                                                                                                                                 |
-| `IMAGE_CHECKPOINT`                          | _(empty = no photos)_                   | SDXL checkpoint file name, as listed by ComfyUI                                                                                 |
-| `IMAGE_WIDTH` / `IMAGE_HEIGHT`              | `832` / `1216`                          | Multiples of 8. SDXL works best around 1 megapixel                                                                              |
-| `IMAGE_STEPS` / `IMAGE_CFG`                 | `25` / `5.5`                            | See [Getting better photos](#getting-better-photos) for per-checkpoint values                                                   |
-| `IMAGE_SAMPLER` / `IMAGE_SCHEDULER`         | `dpmpp_2m` / `karras`                   | ComfyUI names                                                                                                                   |
-| `IMAGE_STYLE`                               | `candid smartphone photo, RAW photo, …` | Tags added to every photo. For an anime look: `anime style, cel shading, vibrant colors` (and remove `anime` from the negative) |
-| `IMAGE_NEGATIVE_PROMPT`                     | `cgi, 3d render, plastic skin, …`       | Child-related terms are always added on top, whatever you set                                                                   |
-| `IMAGE_HIRES_SCALE`                         | `1.25`                                  | Second refinement pass: sharper face and skin, ~1.6× slower. `1` = off                                                          |
-| `IMAGE_HIRES_DENOISE` / `IMAGE_HIRES_STEPS` | `0.35` / `15`                           | How much the second pass may change the image / its steps                                                                       |
-| `IMAGE_FACE_WEIGHT`                         | `0.7`                                   | Reference face strength (IP-Adapter). `0` = off; 0.6–0.8 keeps her face while leaving the scene free                            |
-| `PHOTO_FREQUENCY`                           | `rare`                                  | Photos she sends on her own: `off`, `rare` (≥ 12 of her messages apart), `often` (≥ 5 apart). Asking for one lifts the limit    |
-| `PROACTIVE_AFTER_MINUTES`                   | `60`                                    | She writes first after this many minutes of silence. `0` = never                                                                |
-| `LOG_LEVEL`                                 | `info`                                  | `debug`, `info`, `warn`…                                                                                                        |
+| Variable                                    | Default                                           | Description                                                                                                                                 |
+| ------------------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `HOST`                                      | `127.0.0.1`                                       | Keep loopback: the API has **no authentication**                                                                                            |
+| `PORT`                                      | `3210`                                            |                                                                                                                                             |
+| `LLM_PROVIDER`                              | `ollama`                                          | `ollama` = native Ollama API (recommended). `openai` = any OpenAI-compatible server (llama.cpp, KoboldCpp, LM Studio)                       |
+| `LLM_BASE_URL`                              | `http://127.0.0.1:11434`                          | Base URL **without** `/v1`                                                                                                                  |
+| `LLM_KEEP_ALIVE`                            | `30m`                                             | How long Ollama keeps the model in VRAM after the last request (`2h`, `-1` = forever)                                                       |
+| `LLM_MODEL`                                 | `mistral-nemo:12b-instruct-2407-q4_K_M`           | Model name as known by the backend                                                                                                          |
+| `LLM_API_KEY`                               | _(empty)_                                         | Only for backends requiring one                                                                                                             |
+| `CONTEXT_TOKENS`                            | `8192`                                            | Context window. Applied automatically with `ollama`; with `openai` it must match the backend                                                |
+| `MAX_REPLY_TOKENS`                          | `400`                                             | Max reply length                                                                                                                            |
+| `TEMPERATURE` / `TOP_P`                     | `0.7` / `0.95`                                    | Sampling. Lower temperature = more coherent                                                                                                 |
+| `MIN_P`                                     | `0.05`                                            | Drops very unlikely tokens: the best guard against incoherent tangents                                                                      |
+| `REPEAT_PENALTY`                            | `1.1`                                             | `>1` discourages repetition                                                                                                                 |
+| `CHARACTERS_DIR`                            | `./characters`                                    |                                                                                                                                             |
+| `USER_NAME`                                 | `User`                                            | Your name in the story                                                                                                                      |
+| `REPLY_LANGUAGE`                            | _(empty)_                                         | Force the reply language, e.g. `French`. Letters only. Empty = no constraint                                                                |
+| `DATA_DIR`                                  | `./data`                                          | Where `girllm.db` (chats, memories, settings), `images/` and `faces/` are stored. Git-ignored                                               |
+| `MEMORY_ENABLED`                            | `true`                                            | `false` = step 1 behaviour (chats are still saved)                                                                                          |
+| `EMBEDDING_MODEL`                           | `paraphrase-multilingual`                         | Embedding model for memory search. Empty = memories picked by recency only                                                                  |
+| `EMBEDDING_BASE_URL`                        | = `LLM_BASE_URL`                                  | Backend serving the embedding model                                                                                                         |
+| `MEMORY_TOP_K`                              | `8`                                               | Max memories injected per reply                                                                                                             |
+| `MEMORY_EXTRACT_EVERY`                      | `4`                                               | Facts are extracted once this many new messages are pending                                                                                 |
+| `VOICE_ENABLED`                             | `true`                                            | Voice buttons only appear for what is installed and running (her voice needs ComfyUI, `COMFYUI_URL`)                                        |
+| `MODELS_DIR`                                | `./models`                                        | Where `npm run setup:voice` puts the Whisper models (her voice goes into ComfyUI). Git-ignored                                              |
+| `STT_MODEL`                                 | `whisper-base`                                    | `whisper-tiny`, `whisper-base`, `whisper-small` (more accurate, ~3× slower)                                                                 |
+| `STT_LANGUAGE`                              | _(empty = auto)_                                  | The language you speak, e.g. `fr`. Setting it avoids misdetections on short sentences                                                       |
+| `VOICE_THREADS`                             | `4`                                               | CPU threads of speech recognition (`TTS_VOICE` / `TTS_SPEED` of step 3 are ignored since step 7)                                            |
+| `IMAGES_ENABLED`                            | `true`                                            | Shows the 📷 button (it explains why if ComfyUI isn't ready)                                                                                |
+| `COMFYUI_DIR`                               | _(empty)_                                         | ComfyUI install folder, so `start.bat` can start it. Only used by the launcher                                                              |
+| `COMFYUI_URL`                               | `http://127.0.0.1:8188`                           |                                                                                                                                             |
+| `IMAGE_CHECKPOINT`                          | _(empty = no photos)_                             | SDXL checkpoint file name, as listed by ComfyUI                                                                                             |
+| `IMAGE_WIDTH` / `IMAGE_HEIGHT`              | `832` / `1216`                                    | Multiples of 8. SDXL works best around 1 megapixel                                                                                          |
+| `IMAGE_STEPS` / `IMAGE_CFG`                 | `25` / `5.5`                                      | See [Getting better photos](#getting-better-photos) for per-checkpoint values                                                               |
+| `IMAGE_SAMPLER` / `IMAGE_SCHEDULER`         | `dpmpp_2m` / `karras`                             | ComfyUI names                                                                                                                               |
+| `IMAGE_STYLE`                               | `candid smartphone photo, RAW photo, …`           | Tags added to every photo. For an anime look: `anime style, cel shading, vibrant colors` (and remove `anime` from the negative)             |
+| `IMAGE_NEGATIVE_PROMPT`                     | `cgi, 3d render, plastic skin, …`                 | Child-related terms are always added on top, whatever you set                                                                               |
+| `IMAGE_HIRES_SCALE`                         | `1.25`                                            | Second refinement pass: sharper face and skin, ~1.6× slower. `1` = off                                                                      |
+| `IMAGE_HIRES_DENOISE` / `IMAGE_HIRES_STEPS` | `0.35` / `15`                                     | How much the second pass may change the image / its steps                                                                                   |
+| `IMAGE_FACE_WEIGHT`                         | `0.7`                                             | Reference face strength (IP-Adapter). `0` = off; 0.6–0.8 keeps her face while leaving the scene free                                        |
+| `IMAGE_DETAIL_STRENGTH`                     | `0.35`                                            | Face detail pass: how much a small face is redrawn (0–0.7). `0` = off; above 0.45 the face may change                                       |
+| `PHOTO_FREQUENCY`                           | `rare`                                            | Photos she sends on her own: `off`, `rare` (≥ 12 of her messages apart), `often` (≥ 5 apart). Asking for one lifts the limit                |
+| `REALISTIC_ENGINE`                          | `flux2-klein`                                     | Photo model of realistic characters: `flux2-klein` (FLUX.2 [klein] 4B) or `sdxl` (`IMAGE_CHECKPOINT`). Falls back to `sdxl` until installed |
+| `PROACTIVE_AFTER_MINUTES`                   | `60`                                              | She writes first after this many minutes of silence. `0` = never                                                                            |
+| `ANIME_CHECKPOINT`                          | `animagine-xl-4.0-opt.safetensors`                | Image model for anime characters (installed by `npm run setup:images -- --anime`)                                                           |
+| `ANIME_STEPS` / `ANIME_CFG`                 | `28` / `5`                                        | Animagine's recommended values                                                                                                              |
+| `ANIME_SAMPLER` / `ANIME_SCHEDULER`         | `euler_ancestral` / `normal`                      | "Euler a", as recommended                                                                                                                   |
+| `ANIME_STYLE`                               | `masterpiece, high score, great score, absurdres` | Quality tags, placed last in anime prompts                                                                                                  |
+| `ANIME_NEGATIVE_PROMPT`                     | `lowres, bad anatomy, … low score, …`             | Youth-related tags are always added on top                                                                                                  |
+| `ANIME_HIRES_SCALE`                         | `1`                                               | Detail pass for anime (off: the model is already sharp)                                                                                     |
+| `ANIME_FACE_WEIGHT`                         | `0`                                               | Reference face for anime (the face model is trained on photos: try 0.3–0.5)                                                                 |
+| `ANIME_DETAIL_STRENGTH`                     | `0.3`                                             | Face detail pass for anime characters (0–0.7, `0` = off)                                                                                    |
+| `CHAT_BACKGROUND`                           | `subtle`                                          | Her picture behind the chat: `subtle` (blurred, dimmed), `clear` or `off`                                                                   |
+| `LOG_LEVEL`                                 | `info`                                            | `debug`, `info`, `warn`…                                                                                                                    |
 
 Invalid values stop the app at startup with an explicit message.
 
@@ -315,19 +417,20 @@ values". Ports, folders, context size and providers stay in `.env` (they need a 
 
 ## Scripts
 
-| Command                           | Description                                                                                                                 |
-| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `start.bat`                       | One-click launcher: Ollama + ComfyUI + girllm + browser (Windows)                                                           |
-| `npm run launch`                  | Same launcher, any OS (`-- --no-browser` to skip the browser)                                                               |
-| `npm run dev`                     | Start with hot reload (tsx)                                                                                                 |
-| `npm run setup:voice`             | Download the voice models chosen in `.env`. `-- --list` shows all of them, `-- fr-tom whisper-small` installs specific ones |
-| `npm run setup:images`            | Install IP-Adapter (consistent face) into `COMFYUI_DIR`: nodes at a pinned commit, models checked by SHA-256 (needs git)    |
-| `npm run build` / `npm start`     | Compile to `dist/` and run                                                                                                  |
-| `npm run typecheck`               | TypeScript strict check                                                                                                     |
-| `npm test`                        | Unit + HTTP tests (Vitest), no GPU needed                                                                                   |
-| `npm run lint` / `lint:fix`       | ESLint (type-aware `typescript-eslint` strict rules)                                                                        |
-| `npm run format` / `format:check` | Prettier                                                                                                                    |
-| `npm run check`                   | Everything CI runs: format check, lint, types, tests                                                                        |
+| Command                           | Description                                                                                                                                                                                                                                                                                                |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `start.bat`                       | One-click launcher: Ollama + ComfyUI + girllm + browser (Windows)                                                                                                                                                                                                                                          |
+| `npm run launch`                  | Same launcher, any OS (`-- --no-browser` to skip the browser)                                                                                                                                                                                                                                              |
+| `npm run dev`                     | Start with hot reload (tsx)                                                                                                                                                                                                                                                                                |
+| `npm run setup:voice`             | Whisper (`STT_MODEL`) into `MODELS_DIR`, and her voice into `COMFYUI_DIR`: Qwen3-TTS nodes at a pinned commit, models pinned by commit and SHA-256, missing Python packages at exact versions. `-- --list`, `-- whisper-small`, `-- --stt-only`                                                            |
+| `npm run setup:images`            | Install IP-Adapter (consistent face) into `COMFYUI_DIR`: nodes at a pinned commit, models checked by SHA-256 (needs git), and the face detector. `-- --anime` adds Animagine XL 4.0, `-- --juggernaut` Juggernaut XI, `-- --flux2-klein` FLUX.2 [klein] 4B (bench), `-- --flux2-klein-base` its base model |
+| `npm run compare:images`          | Image test bench: the same test shots through several models, contact sheet in `data/compare-images/` (ComfyUI must be running). See [Comparing image models](#comparing-image-models)                                                                                                                     |
+| `npm run build` / `npm start`     | Compile to `dist/` and run                                                                                                                                                                                                                                                                                 |
+| `npm run typecheck`               | TypeScript strict check                                                                                                                                                                                                                                                                                    |
+| `npm test`                        | Unit + HTTP tests (Vitest), no GPU needed                                                                                                                                                                                                                                                                  |
+| `npm run lint` / `lint:fix`       | ESLint (type-aware `typescript-eslint` strict rules)                                                                                                                                                                                                                                                       |
+| `npm run format` / `format:check` | Prettier                                                                                                                                                                                                                                                                                                   |
+| `npm run check`                   | Everything CI runs: format check, lint, types, tests                                                                                                                                                                                                                                                       |
 
 **CI**: GitHub Actions (`.github/workflows/ci.yml`) runs formatting, lint, type check, tests and build on Node 22 and 24
 for every push and pull request. No GPU or model is needed: the LLM, ComfyUI and voice engines are mocked in the tests.
@@ -343,7 +446,14 @@ for every push and pull request. No GPU or model is needed: the LLM, ComfyUI and
 - **Origin check**: cross-site requests from other websites are rejected (`403`).
 - Strict **CSP** (`default-src 'self'`, no inline scripts). Model output is rendered with `textContent`, never as HTML.
 - Inputs validated with zod. Body limit 64 KB for JSON, messages ≤ 8000 characters, audio ≤ 4 MB, card files
-  ≤ 20 MB, face images ≤ 10 MB.
+  ≤ 20 MB, face images ≤ 10 MB, voice descriptions ≤ 500 characters.
+- **Her voice is always an adult's** (step 7): voice descriptions go through the same minor and young-look checks
+  as photos plus child-voice words (EN/FR), designed voices are always described as an adult's, and a card stating
+  an age under 18 gets no voice (`422`).
+- **Qwen3-TTS install**: the ComfyUI nodes are pinned to a reviewed commit (its `LoadSpeaker` node, which unpickles
+  files, is never used); model URLs are pinned to a Hugging Face commit, the weights also to a SHA-256; an empty
+  `Qwen3-TTS-Tokenizer-12Hz` folder stops the nodes from downloading anything unpinned; only missing Python packages
+  are installed, at exact versions (never the pack's `requirements.txt`).
 - **Uploaded faces** need an explicit consent confirmation (the API refuses an upload without it: `428`), must be a
   real PNG or JPEG (checked from the bytes, not the file name) between 64 and 4096 px, and are re-written keeping
   only the image data: EXIF (GPS, camera), text and comments are dropped. Files are named after the character id,
@@ -376,26 +486,44 @@ for every push and pull request. No GPU or model is needed: the LLM, ComfyUI and
 🎤 mic ─► browser records (webm/opus) ─► decodes + resamples to 16 kHz mono ─► POST /api/stt
         ─► Whisper (sherpa-onnx, CPU) ─► text ─► sent as a normal message
 
-reply tokens ─► SentenceSplitter (in the browser) ─► each complete sentence ─► POST /api/tts
-        ─► *actions* / emojis removed ─► Piper voice (sherpa-onnx, CPU) ─► WAV ─► played in order
+🔊 / Voice on / call ─► her whole message ─► POST /api/tts {text, characterId}
+        ─► *actions* / emojis removed, cut at a sentence end after 1500 characters ─► already spoken? cached FLAC
+        ─► her voice clip (data/voices/<id>.flac; made from her description the first time)
+        ─► EXCLUSIVE GPU PHASE: unload the chat model ─► ComfyUI: Qwen3-TTS voice clone (her clip + its words)
+           ─► FLAC ─► ComfyUI /free ─► cached in data/speech-cache ─► played
+
+editor "Create her voice" ─► description (adult checks) ─► same GPU phase: Qwen3-TTS VoiceDesign says a sample
+        sentence in the chat language ─► candidate ─► "Keep this voice" ─► her clip
 ```
 
-- **Setup**: `npm run setup:voice` downloads only from the official sherpa-onnx GitHub releases, and checks each
-  archive against a pinned SHA-256 before extracting it.
-- **Speed** (6-core CPU): transcription takes well under the length of what you said with `whisper-base`; a sentence
-  of speech is synthesized in a fraction of a second.
+- **Setup**: `npm run setup:voice` installs Whisper from the official sherpa-onnx GitHub releases (each archive
+  checked against a pinned SHA-256 before extraction) and, when `COMFYUI_DIR` is set, Qwen3-TTS into ComfyUI:
+  the [ComfyUI-Qwen-TTS](https://github.com/flybirdxx/ComfyUI-Qwen-TTS) nodes (Apache 2.0) at a pinned commit, the
+  1.7B voice-clone and voice-design models (~9 GB, Apache 2.0), and the few Python packages ComfyUI lacks
+  (`librosa`, `soundfile`, `einops`, `sox`, `onnxruntime`, `accelerate`, at exact versions; only the missing ones).
+  Restart ComfyUI afterwards. A manual (non-portable) ComfyUI gets the pip command printed instead.
+- **Speed** (estimate for an RTX 5060 8 GB, to be confirmed): the model loads in a few seconds, then generates at
+  roughly real time, so a 10 s message should take ~10–25 s the first time, and nothing when replayed. Your chat
+  model reloads by itself for the next reply.
+  Transcription stays on the CPU and takes well under the length of what you said with `whisper-base`.
+- **ComfyUI stops at startup with `UnicodeEncodeError … '\u2705'`**: its output was written in the Windows code
+  page and the Qwen3-TTS nodes print an emoji. `start.bat` runs ComfyUI with UTF-8 output since step 7; if you start
+  ComfyUI yourself into a file, set `PYTHONIOENCODING=utf-8` first. The "SoX could not be found!" warning at startup
+  is harmless (that part of the nodes is not used).
+- **Her voice is unavailable** (no 🔊): ComfyUI isn't running yet (the page checks again every 30 s), or the nodes
+  aren't installed (`npm run setup:voice`, then restart ComfyUI). The reason is in the girllm log at startup.
 - **Accuracy**: `whisper-base` is good for everyday French but can stumble on names. Try `STT_MODEL=whisper-small`
   if it misunderstands you too often (then run `npm run setup:voice` again).
 - **Microphone access** requires a "secure context": `http://127.0.0.1:3210` and `http://localhost:3210` work. A LAN
   or Tailscale IP over plain HTTP doesn't: the mic button is greyed out there.
-- Speech recognition and synthesis each handle one request at a time; extra requests wait their turn.
+- Speech recognition handles one request at a time; voice generations wait for the GPU like photos, one at a time.
 
 ### Hands-free call
 
 ```
 mic ─► AudioWorklet (raw samples) ─► downsampled to 16 kHz ─► voice activity detection (vad.js)
     ─► you stop talking for ~0.9 s ─► the utterance goes to /api/stt ─► sent as a message
-    ─► her reply is spoken sentence by sentence ─► when she's done, listening resumes
+    ─► her whole reply is spoken with her voice (GPU, a few seconds) ─► when she's done, listening resumes
 ```
 
 - The detector compares each 30 ms frame with an **adaptive estimate of the background noise**, with a higher
@@ -417,8 +545,13 @@ mic ─► AudioWorklet (raw samples) ─► downsampled to 16 kHz ─► voice 
   ─► final prompt = "adult" + IMAGE_STYLE + card appearance + scene  ─► safety check
   ─► her reference face uploaded to ComfyUI (once per face, if IP-Adapter is installed)
   ─► EXCLUSIVE GPU PHASE                          (other LLM calls wait, in every chat)
-       unload the Ollama model ─► ComfyUI SDXL txt2img (+ IP-Adapter face) ─► ComfyUI /free
+       unload the Ollama model ─► ComfyUI: FLUX.2 [klein] 8 steps (her face as a reference picture)
+                                  or SDXL txt2img (+ IP-Adapter face)
+       ─► face detail pass: find the face (CPU) ─► small? redraw it at 1024 px, blend it back
+          (FLUX.2: from her profile picture, so it is HER face; SDXL: same prompt + IP-Adapter)
+       ─► ComfyUI /free
   ─► PNG saved in data/images, "📷 request" + photo message added to the chat
+  ↻ retake: same scene, new seed, the new picture replaces the old one in its message
 ```
 
 - The "GPU gate" ensures nothing uses the LLM during generation, including background memory tasks and other
@@ -467,6 +600,59 @@ always there. Keywords are plain text, never regular expressions. Imported Silly
 4. **Describe the photo you want**: "mirror selfie in the elevator, gym clothes" beats "a photo". Without a
    request, she picks something that fits the time of day and the conversation.
 
+5. **Leave the face detail pass on** (Settings → "Face detail pass", 0.35). If her face changes too much between
+   the photo and the redraw, lower it to 0.25; if eyes are still odd, try 0.45.
+6. **Full bodies**: ask for "full body" (or "head to toe") and the photo is drawn in a taller frame. If bodies still
+   look wrong with RealVisXL, try Juggernaut XI and compare (below).
+
+### Comparing image models
+
+```powershell
+npm run setup:images -- --flux2-klein  # once: FLUX.2 [klein] 4B
+npm run compare:images -- --character magi                     # Klein columns, 10 shots, 4 fixed seeds
+npm run compare:images -- --character magi --shots desk,cup,sofa --seeds 2
+npm run compare:images -- --seed-list 84370200426139,108282413766794
+npm run compare:images -- --models flux2-klein-4b-8steps,RealVisXL_V5.0_fp16.safetensors
+npm run compare:images -- --style anime
+```
+
+- ComfyUI must be running. Ollama's model is unloaded first: don't chat during the run.
+- Realistic characters: once FLUX.2 [klein] is installed, only its columns are compared (it replaced the SDXL photo
+  models). Without it: your SDXL model and the other known SDXL models installed. Anime: your model and Animagine.
+- **Always the same seeds** (4 by default, `--seeds 1` to `8`, or your own with `--seed-list`): two runs draw the
+  same pictures, so a change is judged on identical cases. Hands vary a lot from one seed to another.
+- Every model gets the same shots and seeds, its recommended settings (yours for the model currently selected),
+  and the app's real pipeline (adult safety terms, face detail pass for SDXL, full-body framing).
+- `--character <id>` uses her appearance, gender, style and reference face. Without it, a neutral adult subject.
+- `--shots` takes ids among `portrait, selfie, mirror, desk, cup, standing, sofa, outdoor, night, back`.
+- **FLUX.2 [klein] 4B** is three files (the model in fp8, the Qwen3 4B text encoder and the FLUX.2 VAE, in ComfyUI's
+  `diffusion_models`, `text_encoders` and `vae` folders). Its columns, by id for `--models`:
+
+  | Id                           | What                                                                           | Default |
+  | ---------------------------- | ------------------------------------------------------------------------------ | ------- |
+  | `flux2-klein-4b-8steps`      | Distilled model, 8 steps, CFG 1, ~14 s: same picture as 4 steps, cleaner       | yes     |
+  | `flux2-klein-4b-8steps-pose` | Same + a pose guide (see below), for the shots that have one                   | yes     |
+  | `flux2-klein-4b`             | Distilled model, 4 steps (official setting), ~12 s                             | no      |
+  | `flux2-klein-4b-base`        | Undistilled model, 20 steps, CFG 5, real negative prompt: too saturated, ~70 s | no      |
+  | `flux2-klein-4b-noref`       | Distilled model without her face, to see what the reference does               | no      |
+
+  **Pose guides** (experimental): `data/poses/<shot id>.png` is a picture of that shot whose body and hands are right,
+  chosen on an earlier sheet (for example `cup.png`, `desk.png`, `mirror.png`, `standing.png`, `sofa.png`). With
+  `--character`, the `-pose` column gives it to Klein as a second reference picture ("image 2", after her face),
+  with the instruction to copy only the pose and the way her hands hold things, not the face, hair, clothes or
+  background. Shots without a guide are drawn without one. Words don't fix anatomy: a "correct hands" sentence, an
+  "edit the hands" second pass and a 1.5× refine pass were tried and removed (no visible change).
+
+  Its prompt is written in sentences (scene first) with its own photo style: the SDXL tag list and "smartphone photo" style made it draw a phone in most pictures.
+  Her face is given as a reference picture, cropped to the face so that it doesn't copy the clothes and framing of
+  her portrait. The distilled model **ignores negative prompts** (the adult terms of the prompt and the text safety
+  check still apply); the base model uses one: bad hands, extra fingers or limbs, and the youth terms. Klein columns
+  with her face get the app's FLUX.2 face pass ("face redrawn", with the "before" picture). ComfyUI's guide lists ~8.4 GB of VRAM for it: on an 8 GB card part of it is kept in RAM. If the
+  bench says ComfyUI is too old, update ComfyUI (the portable build has `update\update_comfyui.bat`).
+
+- Open `data/compare-images/<date>/index.html`: one row per shot, one column per model, timing, and "before the face
+  pass" to see what the detail pass changed. `results.json` holds the same data.
+
 ## How memory works
 
 ```
@@ -496,15 +682,25 @@ each reply ─► prompt = character card
 
 1. ✅ **Streaming chat + character persona**
 2. ✅ **Memory**: SQLite persistence, running summary, long-term memories with semantic search, mood
-3. ✅ **Voice**: Whisper speech-to-text and Piper French voices, on the CPU via sherpa-onnx
+3. ✅ **Voice**: Whisper speech-to-text and Piper French voices, on the CPU via sherpa-onnx (Piper replaced in step 7)
 4. ✅ **Photos on demand**: ComfyUI SDXL, with GPU handover between the LLM and the image model
    - 4a ✅ Lint, formatting, CI, one-click launcher
    - 4b ✅ More human text (styles, time awareness, anti-repetition, model comparison) and better photos
    - 4c ✅ Settings in the app, character editor with a reference face, hands-free call, new interface
    - 4d ✅ She writes first, sends photos on her own, keeps the same face (IP-Adapter), has her own voice, and
      lorebooks
+5. ✅ **Art styles and backgrounds**: realistic or anime characters (Animagine XL 4.0), women and men, her picture
+   behind the chat (generated scene, latest photo, or face)
+6. ✅ **Better photos**: face detail pass, more natural full bodies, Juggernaut XI, recommended settings per model,
+   and an image test bench to compare models
+   - 6b ✅ FLUX.2 [klein] 4B: compared on the test bench, then the realistic photo model of the app, with a stricter
+     safety check and a "retake" button on photos
+   - 6c ✅ FLUX.2 face pass: her small face redrawn from her profile picture in wide and full-body photos
+7. ✅ **Her own voice**: Qwen3-TTS 1.7B in ComfyUI, a voice designed from a description in the editor and cloned for
+   every message, 🔊 on each message, used by "Voice on" and calls
 
-Ideas for later: a LoRA for an even more consistent face, voice cloning (option B: a Python XTTS service),
-interrupting her by talking during a call, and phone access through Tailscale.
+Ideas for later: a LoRA for an even more consistent face (especially for anime characters), emotions in her voice
+(Qwen3-TTS takes an instruction like "whispering" or "laughing"), interrupting her by talking during a call, and
+phone access through Tailscale.
 
 Architecture details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).

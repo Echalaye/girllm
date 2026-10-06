@@ -59,6 +59,8 @@
 
       <!-- ============ Conversation ============ -->
       <section class="conversation" aria-labelledby="her-name">
+        <!-- Her picture behind the chat (decorative): see updateBackground() in app.js. -->
+        <div id="chat-bg" class="chat-bg" aria-hidden="true"></div>
         <header class="presence">
           <button id="open-sidebar" class="icon-button only-narrow" type="button" aria-label="Open the menu">
             <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16" /></svg>
@@ -218,6 +220,22 @@
               <label><input type="radio" name="style" value="roleplay" /> Roleplay story</label>
             </div>
           </fieldset>
+          <div class="field-row">
+            <fieldset class="field">
+              <legend>Drawn as</legend>
+              <div class="segmented">
+                <label><input type="radio" name="artStyle" value="realistic" checked /> Realistic photos</label>
+                <label><input type="radio" name="artStyle" value="anime" /> Anime</label>
+              </div>
+            </fieldset>
+            <fieldset class="field">
+              <legend>In pictures</legend>
+              <div class="segmented">
+                <label><input type="radio" name="gender" value="female" checked /> Woman</label>
+                <label><input type="radio" name="gender" value="male" /> Man</label>
+              </div>
+            </fieldset>
+          </div>
           <label class="field">
             <span>Who she is</span>
             <textarea
@@ -290,18 +308,42 @@
         </div>
 
         <div class="editor-side">
+          <section class="voice" aria-labelledby="voice-title">
+            <h3 id="voice-title">Her voice</h3>
+            <label class="field">
+              <span class="small muted">What she sounds like</span>
+              <textarea
+                name="voiceDescription"
+                id="voice-description"
+                rows="3"
+                maxlength="500"
+                aria-describedby="voice-hint"
+                placeholder="Woman in her late twenties, warm and slightly husky voice, calm, a little playful, speaks softly"
+              ></textarea>
+              <span id="voice-hint" class="hint"
+                >Age, pitch, texture, mood, pace. Without one, she gets a natural default voice the first time she
+                speaks.</span
+              >
+            </label>
+            <div id="voice-current" class="voice-current"><span class="muted small">No voice yet</span></div>
+            <div class="face-actions">
+              <button id="voice-generate" class="secondary" type="button">Create her voice</button>
+              <button id="voice-remove" class="ghost danger" type="button" hidden>Remove</button>
+            </div>
+            <ol id="voice-candidates" class="voice-candidates" hidden></ol>
+            <p id="voice-status" class="small muted" role="status" aria-live="polite"></p>
+          </section>
+
           <label class="field">
-            <span>Her voice</span>
-            <select name="voice" id="editor-voice"></select>
-          </label>
-          <label class="field">
-            <span>Appearance in photos</span>
+            <span>Appearance in pictures</span>
             <textarea
               name="appearance"
               rows="4"
               maxlength="500"
+              aria-describedby="appearance-hint"
               placeholder="woman, 26 years old, shoulder-length auburn hair, green eyes, freckles"
             ></textarea>
+            <span id="appearance-hint" class="hint"></span>
           </label>
 
           <section class="face" aria-labelledby="face-title">
@@ -316,6 +358,38 @@
             </div>
             <div id="face-candidates" class="face-candidates" hidden></div>
             <p id="face-status" class="small muted" role="status" aria-live="polite"></p>
+          </section>
+
+          <section class="face" aria-labelledby="bg-title">
+            <h3 id="bg-title">Chat background</h3>
+            <label class="field">
+              <span>Behind the chat</span>
+              <select name="background">
+                <option value="scene">Her scene (below)</option>
+                <option value="latest">Her latest photo in the chat</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Her scene, in your words <small class="muted">(optional)</small></span>
+              <textarea
+                name="backgroundScene"
+                rows="4"
+                maxlength="1000"
+                placeholder="e.g. In her art gallery in the afternoon: she stands next to a large abstract canvas, white walls, polished concrete floor, soft light from a tall window. Wide shot, she looks at the camera."
+              ></textarea>
+              <small class="muted"
+                >Used by "Generate 2 scenes". Describe the place, what she does, her outfit and the light. Leave empty
+                to let her imagine it from her card.</small
+              >
+            </label>
+            <p class="small muted">Without a scene or a photo, her face is used.</p>
+            <div id="bg-preview" class="bg-preview"><span class="muted small">No scene yet</span></div>
+            <div class="face-actions">
+              <button id="bg-generate" class="secondary" type="button">Generate 2 scenes</button>
+              <button id="bg-remove" class="ghost danger" type="button" hidden>Remove</button>
+            </div>
+            <div id="bg-candidates" class="face-candidates bg-candidates" hidden></div>
+            <p id="bg-status" class="small muted" role="status" aria-live="polite"></p>
           </section>
         </div>
       </form>

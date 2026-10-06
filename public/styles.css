@@ -246,10 +246,83 @@ input[type='range'] {
   height: 100dvh;
 }
 .conversation {
+  position: relative;
   display: grid;
   grid-template-rows: auto 1fr auto auto;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
+  isolation: isolate; /* the background layer stays behind this section only */
+}
+/* Every row sits above the background layer. */
+.conversation > :not(.chat-bg) {
+  position: relative;
+  z-index: 1;
+}
+
+/*
+ * Her picture behind the chat. "subtle": blurred and dimmed, so text keeps
+ * its contrast; "clear": sharp but dimmed more. The dimming veil uses the
+ * page colour, so it works in both themes.
+ */
+.chat-bg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+.chat-bg img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity 0.6s ease;
+}
+.chat-bg img.loaded {
+  opacity: 1;
+}
+.chat-bg[data-look='subtle'] img {
+  filter: blur(14px) saturate(1.1);
+  transform: scale(1.06); /* hides the blurred edges */
+}
+.chat-bg::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--night) 62%, transparent);
+}
+.chat-bg[data-look='clear']::after {
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--night) 55%, transparent),
+    color-mix(in srgb, var(--night) 75%, transparent)
+  );
+}
+.chat-bg:empty::after {
+  display: none;
+}
+/* With a picture behind, the chrome and bubbles become slightly see-through. */
+.has-bg .presence {
+  border-bottom-color: transparent;
+  background: color-mix(in srgb, var(--night) 55%, transparent);
+  backdrop-filter: blur(10px);
+}
+.has-bg .msg.assistant {
+  background: color-mix(in srgb, var(--dusk) 86%, transparent);
+  backdrop-filter: blur(8px);
+}
+.has-bg .msg.user {
+  background: color-mix(in srgb, var(--you) 90%, transparent);
+  backdrop-filter: blur(8px);
+}
+.has-bg .composer {
+  background: color-mix(in srgb, var(--dusk) 88%, transparent);
+  backdrop-filter: blur(10px);
+}
+.has-bg .empty-chat {
+  color: var(--moon);
 }
 
 /* ------------------------------------------------------------ sidebar -- */
@@ -573,9 +646,108 @@ input[type='range'] {
     opacity: 0.55;
   }
 }
+/* A photo and its "retake" button (top-right corner, shown on hover/focus). */
+.photo-frame {
+  position: relative;
+  width: fit-content;
+  max-width: 100%;
+}
 .photo-link {
   display: block;
   margin-bottom: 0.4rem;
+}
+.retake {
+  position: absolute;
+  top: 0.45rem;
+  right: 0.45rem;
+  width: 2rem;
+  height: 2rem;
+  border: 0;
+  border-radius: 50%;
+  background: rgb(0 0 0 / 55%);
+  color: #fff;
+  font-size: 1.05rem;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.photo-frame:hover .retake,
+.retake:focus-visible {
+  opacity: 1;
+}
+@media (hover: none) {
+  /* Touch screens: no hover, always visible. */
+  .retake {
+    opacity: 0.85;
+  }
+}
+.retake:disabled {
+  opacity: 0;
+  pointer-events: none;
+}
+.photo-frame.retaking .photo {
+  opacity: 0.45;
+  filter: blur(2px);
+  transition:
+    opacity 0.3s,
+    filter 0.3s;
+}
+.photo-frame.retaking .retake {
+  opacity: 1;
+  animation: spin 1.2s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+/* 🔊 Her voice, on demand (step 7). Hidden until her voice is available. */
+.speak {
+  display: block;
+  margin: 0.2rem 0 -0.15rem auto;
+  padding: 0.1rem 0.4rem;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--haze);
+  font-size: var(--step--1);
+  line-height: 1.4;
+  cursor: pointer;
+  opacity: 0.5;
+  transition:
+    opacity 0.15s,
+    background 0.15s;
+}
+.msg:hover .speak,
+.speak:focus-visible,
+.speak[data-state] {
+  opacity: 1;
+}
+.speak:hover {
+  background: var(--dusk-2);
+}
+.speak[data-state='loading'] {
+  animation: pulse 1.2s ease-in-out infinite;
+}
+.speak[data-state='playing'] {
+  background: var(--lamp);
+  color: var(--lamp-ink);
+}
+@media (hover: none) {
+  .speak {
+    opacity: 0.85;
+  }
+}
+.messages:not([data-tts='on']) .speak,
+.msg.pending .speak,
+.msg:not([data-text]) .speak {
+  display: none;
+}
+@keyframes pulse {
+  50% {
+    opacity: 0.35;
+  }
 }
 .photo {
   display: block;
@@ -829,6 +1001,37 @@ dialog.editor {
   display: grid;
   gap: 0.6rem;
 }
+/* Her voice (step 7): current voice and the designed candidates to compare. */
+.voice {
+  display: grid;
+  gap: 0.6rem;
+}
+.voice audio {
+  width: 100%;
+  height: 2.25rem;
+}
+.voice-current {
+  min-height: 2.25rem;
+  display: grid;
+  align-items: center;
+}
+.voice-candidates {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.voice-candidates li {
+  display: grid;
+  gap: 0.3rem;
+  padding: 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.voice-candidates li button {
+  justify-self: start;
+}
 .face-preview {
   display: grid;
   place-items: center;
@@ -847,6 +1050,29 @@ dialog.editor {
   display: flex;
   flex-wrap: wrap;
   gap: 0.4rem;
+}
+/* Chat background preview and candidates: landscape. */
+.bg-preview {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 16 / 11;
+  max-width: 18rem;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.bg-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.face-candidates.bg-candidates {
+  grid-template-columns: 1fr;
+}
+.field-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem 1.5rem;
 }
 .face-candidates {
   display: grid;

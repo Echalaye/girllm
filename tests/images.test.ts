@@ -241,7 +241,7 @@ describe('ImageService + ChatService.sendPhoto', () => {
     expect(comfy.freed).toBe(1);
 
     const positive = comfy.queued[0]!.prompt['3']!.inputs.text as string;
-    expect(positive).toMatch(/^adult, mature adult, solo, photograph, woman, 26 years old, auburn hair, selfie/);
+    expect(positive).toMatch(/^adult, mature adult, woman, solo, photograph, woman, 26 years old, auburn hair, selfie/);
     expect(comfy.queued[0]!.prompt['4']!.inputs.text).toMatch(/^blurry, child, .*underage/);
     const saved = store.get(session.id)!.messages;
     expect(saved.at(-1)!.imageId).toBe(image.id);

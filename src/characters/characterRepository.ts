@@ -18,8 +18,9 @@ import { loadCardFile, parseCardObject, slugify } from './cardLoader.js';
 import {
   characterFromCard,
   readAppearance,
+  readPictureFields,
   readStyle,
-  readVoice,
+  readVoiceDescription,
   toInput,
   type CardFields,
   type Character,
@@ -139,6 +140,7 @@ export class CharacterRepository {
   /** Validate and add a card file's content (import from SillyTavern, chub.ai…). */
   async import(card: CardFields): Promise<Character> {
     assertAdultCharacter({ ...card, appearance: readAppearance(card.extensions) });
+    const picture = readPictureFields(card.extensions);
     return this.save({
       name: card.name,
       description: card.description,
@@ -152,7 +154,11 @@ export class CharacterRepository {
       tags: card.tags.slice(0, 20).map((t) => t.slice(0, 40)).filter(Boolean),
       style: readStyle(card.extensions),
       appearance: readAppearance(card.extensions),
-      voice: readVoice(card.extensions) ?? '',
+      voiceDescription: readVoiceDescription(card.extensions),
+      artStyle: picture.artStyle,
+      gender: picture.gender,
+      background: picture.backgroundMode,
+      backgroundScene: picture.backgroundScene,
       // Imported lorebooks keep their entries (only the standard fields).
       lorebook: (card.character_book?.entries ?? [])
         .filter((e) => e.content.trim())
@@ -209,8 +215,14 @@ export class CharacterRepository {
     girllm.style = input.style;
     if (input.appearance) girllm.appearance = input.appearance;
     else delete girllm.appearance;
-    if (input.voice) girllm.voice = input.voice;
-    else delete girllm.voice;
+    if (input.voiceDescription) girllm.voiceDescription = input.voiceDescription;
+    else delete girllm.voiceDescription;
+    delete girllm.voice; // Piper voice id (steps 3–6): replaced by the designed voice
+    girllm.artStyle = input.artStyle;
+    girllm.gender = input.gender;
+    girllm.background = input.background;
+    if (input.backgroundScene) girllm.backgroundScene = input.backgroundScene;
+    else delete girllm.backgroundScene;
     extensions.girllm = girllm;
     // Keep the book's own settings (name, scan depth, budget…); entries come from the editor.
     const book = input.lorebook.length

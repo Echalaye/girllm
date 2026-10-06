@@ -1,3 +1,4 @@
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parseConfig } from '../src/config.js';
 
@@ -68,27 +69,27 @@ describe('parseConfig LLM provider settings', () => {
 });
 
 describe('parseConfig voice settings', () => {
-  it('defaults to whisper-base + the French siwis voice, auto language', () => {
+  it('defaults to whisper-base, auto language, voices and spoken messages under DATA_DIR', () => {
     expect(parseConfig({}).voice).toEqual({
       enabled: true,
       modelsDir: './models',
       sttModel: 'whisper-base',
       sttLanguage: '',
-      ttsVoice: 'fr-siwis',
-      ttsSpeed: 1,
       threads: 4,
+      voicesDir: join('./data', 'voices'),
+      speechCacheDir: join('./data', 'speech-cache'),
     });
+    expect(parseConfig({ DATA_DIR: '/srv/g' }).voice.voicesDir).toBe(join('/srv/g', 'voices'));
   });
 
   it('validates model ids and language codes', () => {
-    expect(parseConfig({ STT_MODEL: 'whisper-small', TTS_VOICE: 'fr-pierre', STT_LANGUAGE: 'fr' }).voice).toMatchObject(
-      {
-        sttModel: 'whisper-small',
-        ttsVoice: 'fr-pierre',
-        sttLanguage: 'fr',
-      },
-    );
-    expect(() => parseConfig({ TTS_VOICE: 'siri' })).toThrow(/TTS_VOICE/);
+    expect(parseConfig({ STT_MODEL: 'whisper-small', STT_LANGUAGE: 'fr' }).voice).toMatchObject({
+      sttModel: 'whisper-small',
+      sttLanguage: 'fr',
+    });
+    expect(() => parseConfig({ STT_MODEL: 'siri' })).toThrow(/STT_MODEL/);
+    // The Piper settings of steps 3–6 are simply ignored now (an old .env still starts).
+    expect(() => parseConfig({ TTS_VOICE: 'fr-tom', TTS_SPEED: '1.2' })).not.toThrow();
     expect(() => parseConfig({ STT_LANGUAGE: 'french' })).toThrow(/STT_LANGUAGE/);
   });
 });

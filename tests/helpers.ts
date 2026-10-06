@@ -25,7 +25,11 @@ export function makeCharacter(overrides: Partial<Character> = {}): Character {
     extensions: {},
     appearance: '',
     style: 'roleplay',
-    voice: undefined,
+    voiceDescription: '',
+    artStyle: 'realistic',
+    gender: 'female',
+    backgroundMode: 'scene',
+    backgroundScene: '',
     ...overrides,
   };
 }
@@ -131,6 +135,9 @@ export const TINY_PNG = Buffer.from(
   'hex',
 );
 
+/** A FLAC file as far as girllm checks it (magic bytes); `n` makes each one different. */
+export const fakeFlac = (n = 0) => Buffer.concat([Buffer.from('fLaC', 'ascii'), Buffer.from(`audio ${n}`)]);
+
 /** In-memory fake of the ComfyUI HTTP API, as a fetch implementation. */
 export class FakeComfy {
   queued: Array<{ prompt: Record<string, { class_type: string; inputs: Record<string, unknown> }> }> = [];
@@ -146,12 +153,43 @@ export class FakeComfy {
     ipadapterFiles: ['ip-adapter-plus-face_sdxl_vit-h.safetensors'],
     clipFiles: ['CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors'],
   };
-  uploads: Array<{ name: string; size: number }> = [];
+  uploads: Array<{ name: string; size: number; type: string }> = [];
+  /** Qwen3-TTS nodes + core audio nodes (step 7). */
+  qwen = false;
+  /** FLUX.2 [klein] (step 6): node and file lists of a recent ComfyUI; null = old ComfyUI without it. */
+  flux: { unet: string[]; clip: string[]; vae: string[] } | null = null;
   private polls = 0;
 
   fetch = (async (input: string | URL, init?: RequestInit) => {
     const url = new URL(String(input));
     const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
+    const flux = this.flux;
+    if (flux) {
+      const node = url.pathname.replace('/object_info/', '');
+      const lists: Record<string, Record<string, string[]>> = {
+        EmptyFlux2LatentImage: {},
+        ReferenceLatent: {},
+        UNETLoader: { unet_name: flux.unet },
+        CLIPLoader: { clip_name: flux.clip },
+        VAELoader: { vae_name: flux.vae },
+      };
+      const inputs = lists[node];
+      if (inputs) {
+        const required = Object.fromEntries(Object.entries(inputs).map(([k, v]) => [k, [v]]));
+        return json({ [node]: { input: { required } } });
+      }
+    }
+    if (this.qwen) {
+      const node = url.pathname.replace('/object_info/', '');
+      const qwenNodes: Record<string, string[]> = {
+        FB_Qwen3TTSVoiceClone: ['target_text', 'ref_audio', 'ref_text', 'language', 'unload_model_after_generate'],
+        FB_Qwen3TTSVoiceDesign: ['text', 'instruct', 'language', 'unload_model_after_generate'],
+        LoadAudio: ['audio'],
+        SaveAudio: ['audio', 'filename_prefix'],
+      };
+      const inputs = qwenNodes[node];
+      if (inputs) return json({ [node]: { input: { required: Object.fromEntries(inputs.map((k) => [k, ['X']])) } } });
+    }
     if (url.pathname === '/object_info/CheckpointLoaderSimple') {
       return json({ CheckpointLoaderSimple: { input: { required: { ckpt_name: [this.checkpoints] } } } });
     }
@@ -185,7 +223,7 @@ export class FakeComfy {
     if (url.pathname === '/upload/image') {
       const form = init?.body as FormData;
       const file = form.get('image') as File;
-      this.uploads.push({ name: file.name, size: file.size });
+      this.uploads.push({ name: file.name, size: file.size, type: file.type });
       return json({ name: file.name, subfolder: '', type: 'input' });
     }
     if (url.pathname === '/prompt') {
@@ -205,6 +243,19 @@ export class FakeComfy {
       init?.signal?.throwIfAborted();
       if (this.polls++ < this.pollsBeforeDone) return json({});
       if (this.failWith === 'execution') return json({ p1: { status: { status_str: 'error', completed: false } } });
+      const last = this.queued.at(-1)?.prompt ?? {};
+      if (Object.values(last).some((n) => n.class_type === 'SaveAudio')) {
+        return json({
+          p1: {
+            status: { status_str: 'success', completed: true },
+            outputs: {
+              '3': {
+                audio: [{ filename: `voice_${this.queued.length}.flac`, subfolder: 'girllm_voice', type: 'output' }],
+              },
+            },
+          },
+        });
+      }
       return json({
         p1: {
           status: { status_str: 'success', completed: true },
@@ -213,6 +264,9 @@ export class FakeComfy {
       });
     }
     if (url.pathname === '/view') {
+      if (url.searchParams.get('filename')?.endsWith('.flac')) {
+        return new Response(this.failWith === 'not_png' ? Buffer.from('<html>') : fakeFlac(this.queued.length));
+      }
       return new Response(this.failWith === 'not_png' ? Buffer.from('<html>') : TINY_PNG);
     }
     if (url.pathname === '/free') {

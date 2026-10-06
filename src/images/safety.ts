@@ -136,3 +136,65 @@ export function cardStatesMinorAge(text: string): boolean {
 export function assertSafe(...texts: string[]): void {
   if (texts.some((t) => mentionsMinor(t))) throw new ImageRefusedError();
 }
+
+/**
+ * Words that make a person look young without naming a minor. With SDXL the
+ * youth terms of the negative prompt push against them; FLUX.2 [klein]
+ * (distilled) has no negative prompt, so its prompts must not contain them
+ * at all (step 6). Conservative on purpose: a refusal only costs a photo.
+ */
+const YOUNG_LOOK_TERMS = [
+  words([
+    'baby face',
+    'babyface',
+    'baby-faced',
+    'young-looking',
+    'young looking',
+    'looks young',
+    'childish',
+    'girlish',
+    'boyish',
+    'flat chest',
+    'flat-chested',
+    'pigtails',
+    'twin tails',
+    'twintails',
+    'pacifier',
+    'diaper',
+    'diapers',
+    'braces',
+    'training bra',
+    'kindergarten',
+    'playground',
+    'school bag',
+    'schoolbag',
+  ]),
+  words([
+    'visage enfantin',
+    'air enfantin',
+    'enfantin',
+    'enfantine',
+    'poitrine plate',
+    'couettes',
+    'appareil dentaire',
+    'cartable',
+    'tétine',
+    'maternelle',
+    'cour de récréation',
+  ]),
+];
+
+/** True if the text describes a young look (stricter check for models without a negative prompt). */
+export function mentionsYoungLook(text: string): boolean {
+  return YOUNG_LOOK_TERMS.some((re) => re.test(text));
+}
+
+/**
+ * assertSafe, plus the young-look terms: for image models that cannot use a
+ * negative prompt (FLUX.2 [klein] distilled).
+ * @throws ImageRefusedError
+ */
+export function assertSafeStrict(...texts: string[]): void {
+  assertSafe(...texts);
+  if (texts.some((t) => mentionsYoungLook(t))) throw new ImageRefusedError();
+}

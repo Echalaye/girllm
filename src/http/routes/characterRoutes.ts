@@ -1,9 +1,13 @@
 /**
  * Character editor API: create / edit / delete / import / export cards, and
- * the reference face (upload with consent, or generated portraits).
+ * the character's pictures:
+ *   - face: reference portrait (generated candidates, or upload with consent);
+ *   - background: the scene shown behind the chat (generated candidates);
+ *   - voice: her reference voice clip (step 7), designed from a description
+ *     (candidates the user listens to, then keeps).
  */
 import { readFile } from 'node:fs/promises';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { extractCardJsonFromPng, parseCardObject } from '../../characters/cardLoader.js';
 import type { CharacterRepository } from '../../characters/characterRepository.js';
@@ -12,17 +16,27 @@ import type { FaceStore } from '../../characters/faceStore.js';
 import { CharacterInputSchema, toInput, type Character } from '../../characters/schema.js';
 import { ImageUnavailableError, type ImageService } from '../../images/imageService.js';
 import { detectImageType, sanitizeImage } from '../../images/imageSanitizer.js';
+import { MAX_VOICE_DESCRIPTION_CHARS } from '../../characters/schema.js';
+import { VoiceUnavailableError, type TextToSpeech } from '../../voice/types.js';
+import type { VoiceStore } from '../../voice/voiceStore.js';
+import { withClientAbort } from '../clientAbort.js';
 
 export interface CharacterRoutesDeps {
   characters: CharacterRepository;
   characterService: CharacterService;
   faces: FaceStore;
+  /** Chat backgrounds (same store type as faces, another folder). */
+  backgrounds?: FaceStore | undefined;
   images?: ImageService | undefined;
+  /** Reference voices (step 7) and the engine that designs them; absent when voice is off. */
+  voices?: VoiceStore | undefined;
+  tts?: TextToSpeech | undefined;
 }
 
 const CharacterId = z.string().regex(/^[a-z0-9-]{1,80}$/);
 const IdParams = z.object({ id: CharacterId });
 const CandidateParams = z.object({ id: CharacterId, candidateId: z.string().uuid() });
+const VoiceDesignBody = z.object({ description: z.string().trim().min(1).max(MAX_VOICE_DESCRIPTION_CHARS) });
 
 /** Header the editor must send with a face upload: the user's explicit attestation. */
 export const CONSENT_HEADER = 'x-girllm-consent';
@@ -32,8 +46,9 @@ export const CONSENT_VALUE = 'adult-and-consenting';
 const MAX_CARD_BYTES = 20 * 1024 * 1024;
 /** Face uploads: the sanitizer refuses anything above 10 MB anyway. */
 const MAX_FACE_BYTES = 10 * 1024 * 1024;
-/** Portrait candidates generated per request, and how long they are kept. */
+/** Candidates generated per request (portraits are cheaper than wide scenes), and how long they are kept. */
 const PORTRAIT_COUNT = 4;
+const BACKGROUND_COUNT = 2;
 const CANDIDATE_TTL_MS = 60 * 60 * 1000;
 
 const MIME = { png: 'image/png', jpeg: 'image/jpeg' } as const;
@@ -60,7 +75,11 @@ export function registerCharacterRoutes(app: FastifyInstance, deps: CharacterRou
     creatorNotes: c.creator_notes,
     tags: c.tags,
     style: c.style,
+    artStyle: c.artStyle,
+    gender: c.gender,
+    background: c.backgroundMode,
     hasFace: faces.get(c.id) !== undefined,
+    hasBackground: deps.backgrounds?.get(c.id) !== undefined,
   });
 
   // ---- Cards ---------------------------------------------------------------
@@ -68,7 +87,13 @@ export function registerCharacterRoutes(app: FastifyInstance, deps: CharacterRou
   app.get('/api/characters/:id', async (request) => {
     const { id } = IdParams.parse(request.params);
     const c = requireCharacter(id);
-    return { ...summary(c), card: toInput(c) };
+    const voice = await deps.voices?.get(id);
+    return {
+      ...summary(c),
+      card: toInput(c),
+      // Her current voice clip (the editor plays /api/characters/:id/voice), or null.
+      voice: voice ? { description: voice.info.description, createdAt: voice.info.createdAt } : null,
+    };
   });
 
   app.post('/api/characters', async (request, reply) => {
@@ -127,18 +152,128 @@ export function registerCharacterRoutes(app: FastifyInstance, deps: CharacterRou
       .send(JSON.stringify(card, null, 2));
   });
 
-  // ---- Reference face ------------------------------------------------------
+  // ---- Pictures: reference face and chat background -------------------------
 
-  app.get('/api/characters/:id/face', async (request, reply) => {
-    const { id } = IdParams.parse(request.params);
-    requireCharacter(id);
-    const face = faces.get(id);
-    if (!face) throw new NotFoundHttpError('No face for this character');
-    return reply
-      .header('Content-Type', MIME[face.type])
-      .header('Cache-Control', 'no-cache')
-      .send(await readFile(face.path));
-  });
+  /**
+   * GET / DELETE the picture, POST …/candidates to generate some (long
+   * request, cancelled if the client goes away), GET a candidate's preview,
+   * POST a candidate to make it the picture.
+   */
+  const registerPicture = (
+    kind: 'face' | 'background',
+    store: FaceStore,
+    generate: (images: ImageService, c: Character, signal: AbortSignal) => Promise<Buffer[]>,
+  ) => {
+    const base = `/api/characters/:id/${kind}`;
+
+    app.get(base, async (request, reply) => {
+      const { id } = IdParams.parse(request.params);
+      requireCharacter(id);
+      const file = store.get(id);
+      if (!file) throw new NotFoundHttpError(`No ${kind} for this character`);
+      return reply
+        .header('Content-Type', MIME[file.type])
+        .header('Cache-Control', 'no-cache')
+        .send(await readFile(file.path));
+    });
+
+    app.delete(base, async (request, reply) => {
+      const { id } = IdParams.parse(request.params);
+      requireCharacter(id);
+      await store.remove(id);
+      return reply.code(204).send();
+    });
+
+    app.post(`${base}/candidates`, async (request, reply) => {
+      const { id } = IdParams.parse(request.params);
+      const c = requireCharacter(id);
+      if (!deps.images) throw new ImageUnavailableError('Photos are disabled (IMAGES_ENABLED=false)');
+      await store.cleanupCandidates(CANDIDATE_TTL_MS);
+      // Closing the editor (or the tab) cancels the generation.
+      const pngs = await withClientAbort(reply, (signal) => generate(deps.images!, c, signal));
+      const candidates = await Promise.all(pngs.map((png) => store.addCandidate(png)));
+      return { candidates };
+    });
+
+    app.get(`${base}/candidates/:candidateId`, async (request, reply) => {
+      const { candidateId } = CandidateParams.parse(request.params);
+      const path = store.candidatePath(candidateId);
+      if (!path) throw new NotFoundHttpError('Candidate expired');
+      return reply.header('Content-Type', 'image/png').send(await readFile(path));
+    });
+
+    /** Pick a generated candidate (no consent needed: it's AI-generated). */
+    app.post(`${base}/candidates/:candidateId`, async (request, reply) => {
+      const { id, candidateId } = CandidateParams.parse(request.params);
+      requireCharacter(id);
+      if (!(await store.promote(id, candidateId))) throw new NotFoundHttpError('Candidate expired');
+      return reply.code(204).send();
+    });
+  };
+
+  registerPicture('face', faces, (images, c, signal) =>
+    images.generatePortraits(
+      { appearance: c.appearance, artStyle: c.artStyle, gender: c.gender },
+      PORTRAIT_COUNT,
+      signal,
+    ),
+  );
+  if (deps.backgrounds) {
+    registerPicture('background', deps.backgrounds, (images, c, signal) =>
+      images.generateBackgrounds(c.id, BACKGROUND_COUNT, signal),
+    );
+  }
+
+  // ---- Voice (step 7) ------------------------------------------------------
+
+  const { voices, tts } = deps;
+  if (voices) {
+    const flac = (reply: FastifyReply, bytes: Buffer) =>
+      reply.header('Content-Type', 'audio/flac').header('Cache-Control', 'no-cache').send(bytes);
+
+    /** Her reference clip (what her voice sounds like). */
+    app.get('/api/characters/:id/voice', async (request, reply) => {
+      const { id } = IdParams.parse(request.params);
+      requireCharacter(id);
+      const voice = await voices.get(id);
+      if (!voice) throw new NotFoundHttpError('No voice for this character yet');
+      return flac(reply, await readFile(voice.path));
+    });
+
+    /** Forget her voice: a new one is made from her description the next time she speaks. */
+    app.delete('/api/characters/:id/voice', async (request, reply) => {
+      const { id } = IdParams.parse(request.params);
+      requireCharacter(id);
+      await voices.remove(id);
+      return reply.code(204).send();
+    });
+
+    /** Design a voice from a description (long request: GPU swap, ~10–30 s). */
+    app.post('/api/characters/:id/voice/candidates', async (request, reply) => {
+      const { id } = IdParams.parse(request.params);
+      requireCharacter(id);
+      const { description } = VoiceDesignBody.parse(request.body);
+      if (!tts) throw new VoiceUnavailableError('Voice is disabled (VOICE_ENABLED=false)');
+      await voices.cleanupCandidates(CANDIDATE_TTL_MS);
+      const candidate = await withClientAbort(reply, (signal) => tts.designCandidate(id, description, signal));
+      return { candidate };
+    });
+
+    app.get('/api/characters/:id/voice/candidates/:candidateId', async (request, reply) => {
+      const { candidateId } = CandidateParams.parse(request.params);
+      const path = voices.candidatePath(candidateId);
+      if (!path) throw new NotFoundHttpError('Candidate expired');
+      return flac(reply, await readFile(path));
+    });
+
+    /** Keep a designed voice as hers. */
+    app.post('/api/characters/:id/voice/candidates/:candidateId', async (request, reply) => {
+      const { id, candidateId } = CandidateParams.parse(request.params);
+      requireCharacter(id);
+      if (!(await voices.promote(id, candidateId))) throw new NotFoundHttpError('Candidate expired');
+      return reply.code(204).send();
+    });
+  }
 
   /**
    * Upload a face image. Requires the consent header: the user attests the
@@ -158,49 +293,6 @@ export function registerCharacterRoutes(app: FastifyInstance, deps: CharacterRou
       throw badRequest((err as Error).message);
     }
     await faces.save(id, image);
-    return reply.code(204).send();
-  });
-
-  app.delete('/api/characters/:id/face', async (request, reply) => {
-    const { id } = IdParams.parse(request.params);
-    requireCharacter(id);
-    await faces.remove(id);
-    return reply.code(204).send();
-  });
-
-  /** Generate portrait candidates from the (saved) appearance. Long request. */
-  app.post('/api/characters/:id/face/candidates', async (request, reply) => {
-    const { id } = IdParams.parse(request.params);
-    const c = requireCharacter(id);
-    if (!deps.images) throw new ImageUnavailableError('Photos are disabled (IMAGES_ENABLED=false)');
-    await faces.cleanupCandidates(CANDIDATE_TTL_MS);
-    // Closing the editor (or the tab) cancels the generation.
-    const controller = new AbortController();
-    const onClose = () => {
-      if (!reply.raw.writableEnded) controller.abort(new Error('client disconnected'));
-    };
-    reply.raw.on('close', onClose);
-    try {
-      const pngs = await deps.images.generatePortraits(c.appearance, PORTRAIT_COUNT, controller.signal);
-      const candidates = await Promise.all(pngs.map((png) => faces.addCandidate(png)));
-      return { candidates };
-    } finally {
-      reply.raw.off('close', onClose);
-    }
-  });
-
-  app.get('/api/characters/:id/face/candidates/:candidateId', async (request, reply) => {
-    const { candidateId } = CandidateParams.parse(request.params);
-    const path = faces.candidatePath(candidateId);
-    if (!path) throw new NotFoundHttpError('Candidate expired');
-    return reply.header('Content-Type', 'image/png').send(await readFile(path));
-  });
-
-  /** Pick a generated candidate as the face (no consent needed: it's AI-generated). */
-  app.post('/api/characters/:id/face/candidates/:candidateId', async (request, reply) => {
-    const { id, candidateId } = CandidateParams.parse(request.params);
-    requireCharacter(id);
-    if (!(await faces.promote(id, candidateId))) throw new NotFoundHttpError('Candidate expired');
     return reply.code(204).send();
   });
 }

@@ -3,6 +3,8 @@
  *
  * The file is streamed to disk while its SHA-256 is computed; a mismatch
  * deletes it and throws, so a corrupted or tampered download is never used.
+ * `null` is only for small config files whose URL is already pinned to an
+ * immutable commit (Hugging Face `resolve/<commit>/…`).
  */
 import { createHash } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
@@ -10,8 +12,11 @@ import { rm } from 'node:fs/promises';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 
+/** Unhashed (commit-pinned) files are small configs: anything bigger is refused. */
+export const MAX_UNHASHED_BYTES = 10 * 1024 * 1024;
+
 /** Download `url` to `dest`, hashing on the fly, with a progress line. */
-export async function download(url: string, dest: string, expectedSha256: string): Promise<void> {
+export async function download(url: string, dest: string, expectedSha256: string | null): Promise<void> {
   const res = await fetch(url, { redirect: 'follow' });
   if (!res.ok || !res.body) throw new Error(`Download failed: HTTP ${res.status} for ${url}`);
 
@@ -23,6 +28,10 @@ export async function download(url: string, dest: string, expectedSha256: string
     transform(chunk: Buffer, _enc, cb) {
       hash.update(chunk);
       received += chunk.length;
+      if (expectedSha256 === null && received > MAX_UNHASHED_BYTES) {
+        cb(new Error(`${url} is larger than expected for a config file (> 10 MB): refused`));
+        return;
+      }
       const now = Date.now();
       if (now - lastPrint > 500) {
         lastPrint = now;
@@ -42,7 +51,7 @@ export async function download(url: string, dest: string, expectedSha256: string
   process.stdout.write('\n');
 
   const actual = hash.digest('hex');
-  if (actual !== expectedSha256) {
+  if (expectedSha256 !== null && actual !== expectedSha256) {
     await rm(dest, { force: true });
     throw new Error(
       `Checksum mismatch for ${url}\n  expected ${expectedSha256}\n  got      ${actual}\nThe file was deleted.`,

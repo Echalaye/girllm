@@ -1,6 +1,7 @@
 /**
- * Reference face of each character (data/faces/<id>.png|jpg), plus the
- * temporary portrait candidates generated in the editor.
+ * One picture per character in a folder, plus the temporary candidates
+ * generated in the editor. Used for the reference faces (data/faces) and
+ * the chat backgrounds (data/backgrounds).
  *
  * Every path is built from a validated id (character slug or UUID), never
  * from client input, so nothing can escape the faces folder.

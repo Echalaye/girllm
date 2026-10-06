@@ -1,7 +1,8 @@
-// Character editor: create / edit / delete / export a character, and pick
-// her reference face (generated portraits, or an uploaded photo after an
-// explicit consent step). All text goes through form values and
-// textContent; images are served by the local API.
+// Character editor: create / edit / delete / export a character, pick her
+// reference face (generated portraits, or an uploaded photo after an
+// explicit consent step), her chat background and her voice (designed from
+// a description, step 7). All text goes through form values and
+// textContent; images and audio are served by the local API.
 
 import { api, confirmAction, ensureOk, wireDialog } from './api.js';
 
@@ -17,19 +18,49 @@ const TEXT_FIELDS = [
   'post_history_instructions',
   'creator_notes',
   'appearance',
+  'voiceDescription',
 ];
 
+/** Voice candidates kept on screen to compare (newest first). */
+const MAX_VOICE_CANDIDATES = 3;
+
 const $ = (id) => document.getElementById(id);
+
+/** The two pictures of a character: element id prefix, how many candidates, wording. */
+const PICTURES = {
+  face: {
+    prefix: 'face',
+    count: 4,
+    noun: 'faces',
+    alt: 'Her reference face',
+    empty: 'No face yet',
+    pick: 'Pick the face you prefer.',
+  },
+  background: {
+    prefix: 'bg',
+    count: 2,
+    noun: 'scenes',
+    alt: 'Her chat background',
+    empty: 'No scene yet',
+    pick: 'Pick the scene you prefer.',
+  },
+};
+
+/** Appearance placeholder per art style: photo words vs anime (Danbooru) tags. */
+const APPEARANCE_HINTS = {
+  realistic: 'woman, 26 years old, shoulder-length auburn hair, green eyes, freckles',
+  anime: 'long hair, auburn hair, green eyes, freckles, slim',
+};
 
 export class CharacterEditor {
   /**
    * @param {{
    *   onSaved: (summary: object) => void,
    *   onDeleted: (id: string) => void,
-   *   onFaceChanged: (id: string) => void,
-   *   photosAvailable: () => boolean,
-   *   faceSupport: () => { ready: boolean, reason?: string } | undefined,
-   *   voices: () => Array<{ id: string, description: string, installed: boolean }>,
+   *   onPictureChanged: (id: string) => void,
+   *   photosAvailable: (artStyle?: string) => boolean,
+   *   faceSupport: (artStyle: string) => { ready: boolean, reason?: string } | undefined,
+   *   voiceStatus: () => { available: boolean, reason?: string } | null,
    * }} handlers
    */
   constructor(handlers) {
@@ -39,6 +70,8 @@ export class CharacterEditor {
     this.id = null;
     /** Aborts a running portrait generation when the editor closes. */
     this.generation = null;
+    /** Aborts a running voice design when the editor closes. */
+    this.voiceGeneration = null;
     /** JSON of the form as last loaded or saved, to detect unsaved changes. */
     this.savedState = '';
     /**
@@ -52,6 +85,9 @@ export class CharacterEditor {
     wireDialog(this.dialog, { backdropClose: false, canClose: () => this.#confirmDiscard() });
     this.dialog.addEventListener('close', () => {
       this.generation?.abort();
+      this.voiceGeneration?.abort();
+      // Silence any voice preview still playing.
+      this.dialog.querySelectorAll('audio').forEach((a) => a.pause());
       // Closed with unsaved changes without choosing "Discard" (e.g. the
       // browser forced it): keep the draft for the next opening.
       this.draftKey = !this.discarded && this.#isDirty() ? (this.id ?? 'new') : null;
@@ -67,10 +103,19 @@ export class CharacterEditor {
     });
     $('editor-delete').addEventListener('click', () => void this.#delete());
     $('editor-export').addEventListener('click', () => void this.#run(() => this.#export()));
-    $('face-generate').addEventListener('click', () => void this.#generateFaces());
+    for (const kind of Object.keys(PICTURES)) {
+      const { prefix } = PICTURES[kind];
+      $(`${prefix}-generate`).addEventListener('click', () => void this.#generate(kind));
+      $(`${prefix}-remove`).addEventListener('click', () => void this.#removePicture(kind));
+    }
+    $('voice-generate').addEventListener('click', () => void this.#designVoice());
+    $('voice-remove').addEventListener('click', () => void this.#removeVoice());
     $('face-upload').addEventListener('click', () => void this.#askConsentThenPick());
     $('face-file').addEventListener('change', () => void this.#uploadFace());
-    $('face-remove').addEventListener('click', () => void this.#removeFace());
+    // The appearance hint and face note follow the art style.
+    this.form
+      .querySelectorAll('input[name="artStyle"]')
+      .forEach((r) => r.addEventListener('change', () => this.#renderStyleHints()));
     $('lore-add').addEventListener('click', () => {
       const item = this.#loreItem();
       $('lore-list').append(item);
@@ -92,17 +137,21 @@ export class CharacterEditor {
     this.id = id;
     this.form.reset();
     this.#status('');
-    this.#faceStatus('');
-    $('face-candidates').hidden = true;
-    $('face-candidates').replaceChildren();
+    for (const kind of Object.keys(PICTURES)) {
+      this.#pictureStatus(kind, '');
+      $(`${PICTURES[kind].prefix}-candidates`).hidden = true;
+      $(`${PICTURES[kind].prefix}-candidates`).replaceChildren();
+      this.#showPicture(kind, false);
+    }
     $('editor-title').textContent = id ? 'Edit character' : 'New character';
     $('editor-delete').hidden = $('editor-export').hidden = !id;
-    $('face-generate').disabled = !this.handlers.photosAvailable();
-    $('face-generate').title = this.handlers.photosAvailable() ? '' : 'Photos are not available right now';
-    this.#showFace(false);
-    this.#renderVoices();
+    this.#showVoice(false);
+    this.#voiceStatus('');
+    $('voice-candidates').hidden = true;
+    $('voice-candidates').replaceChildren();
+    $('voice-generate').textContent = 'Create her voice';
     this.#renderLore([]);
-    this.#renderFaceUsage();
+    this.#renderStyleHints();
     this.dialog.showModal();
 
     if (!id) {
@@ -114,10 +163,16 @@ export class CharacterEditor {
       const data = await api(`/api/characters/${encodeURIComponent(id)}`);
       for (const key of TEXT_FIELDS) this.form.elements.namedItem(key).value = data.card[key] ?? '';
       this.form.elements.namedItem('tags').value = data.card.tags.join(', ');
-      this.form.querySelector(`input[name="style"][value="${data.card.style}"]`).checked = true;
-      this.#renderVoices(data.card.voice);
+      for (const name of ['style', 'artStyle', 'gender']) {
+        this.form.querySelector(`input[name="${name}"][value="${data.card[name]}"]`).checked = true;
+      }
+      this.form.elements.namedItem('background').value = data.card.background;
+      this.form.elements.namedItem('backgroundScene').value = data.card.backgroundScene ?? '';
+      this.#showVoice(Boolean(data.voice));
       this.#renderLore(data.card.lorebook ?? []);
-      this.#showFace(data.hasFace);
+      this.#renderStyleHints();
+      this.#showPicture('face', data.hasFace);
+      this.#showPicture('background', data.hasBackground);
     } catch (err) {
       this.#status(err.message, true);
     }
@@ -152,42 +207,145 @@ export class CharacterEditor {
     const value = (key) => this.form.elements.namedItem(key).value;
     const card = Object.fromEntries(TEXT_FIELDS.map((key) => [key, value(key)]));
     card.name = card.name.trim();
-    card.style = this.form.querySelector('input[name="style"]:checked').value;
+    const checked = (name) => this.form.querySelector(`input[name="${name}"]:checked`).value;
+    card.style = checked('style');
+    card.artStyle = checked('artStyle');
+    card.gender = checked('gender');
+    card.background = value('background');
+    card.backgroundScene = value('backgroundScene').trim();
     card.tags = value('tags')
       .split(',')
       .map((t) => t.trim())
       .filter(Boolean)
       .slice(0, 20);
-    card.voice = value('voice');
+    card.voiceDescription = card.voiceDescription.trim();
     card.lorebook = this.#collectLore();
     return card;
   }
 
   // ------------------------------------------------------------ voice --
+  // Her voice (step 7): Qwen3-TTS designs it from the description; the user
+  // listens to one or more candidates and keeps one. Every message she
+  // speaks is then said with that exact voice.
 
-  /** "Her voice" list: the default (from the settings) + every voice, uninstalled ones disabled. */
-  #renderVoices(selected = '') {
-    const select = $('editor-voice');
-    const option = (value, label, disabled = false) => {
-      const o = document.createElement('option');
-      o.value = value;
-      o.textContent = label;
-      o.disabled = disabled;
-      return o;
-    };
-    const voices = this.handlers.voices();
-    select.replaceChildren(
-      option('', 'Default voice (from the settings)'),
-      ...voices.map((v) =>
-        option(
-          v.id,
-          v.installed ? v.description : `${v.description} (not installed)`,
-          !v.installed && v.id !== selected,
-        ),
-      ),
-    );
-    select.value = selected;
-    select.disabled = voices.length === 0;
+  #voiceUrl(path = '') {
+    return `/api/characters/${encodeURIComponent(this.id)}/voice${path}`;
+  }
+
+  /** Her current voice: a player, or "No voice yet". */
+  #showVoice(has) {
+    $('voice-remove').hidden = !has;
+    const box = $('voice-current');
+    if (!has) {
+      const span = document.createElement('span');
+      span.className = 'muted small';
+      span.textContent = 'No voice yet';
+      box.replaceChildren(span);
+      return;
+    }
+    const audio = document.createElement('audio');
+    audio.controls = true;
+    audio.preload = 'none';
+    audio.src = `${this.#voiceUrl()}?v=${Date.now()}`; // fresh after a change
+    audio.setAttribute('aria-label', 'Her voice');
+    box.replaceChildren(audio);
+  }
+
+  /** The voice is designed from the SAVED card (her gender) and the description in the form. */
+  async #designVoice() {
+    const field = $('voice-description');
+    const description = field.value.trim();
+    if (!description) {
+      this.#voiceStatus('Describe her voice first.', true);
+      field.focus();
+      return;
+    }
+    const status = this.handlers.voiceStatus();
+    if (status && !status.available) {
+      this.#voiceStatus(`Her voice is unavailable: ${status.reason ?? 'not installed'}.`, true);
+      return;
+    }
+    const button = $('voice-generate');
+    button.disabled = true;
+    const started = Date.now();
+    const tick = () => this.#voiceStatus(`Creating her voice… ${Math.round((Date.now() - started) / 1000)} s`);
+    let timer;
+    try {
+      await this.#save();
+      tick();
+      timer = setInterval(tick, 1000);
+      this.voiceGeneration = new AbortController();
+      const res = await fetch(this.#voiceUrl('/candidates'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ description }),
+        signal: this.voiceGeneration.signal,
+      });
+      await ensureOk(res);
+      const { candidate } = await res.json();
+      this.#addVoiceCandidate(candidate, description);
+      this.#voiceStatus('Listen, then keep it, or create another one.');
+    } catch (err) {
+      this.#voiceStatus(err.name === 'AbortError' ? 'Cancelled' : err.message, err.name !== 'AbortError');
+    } finally {
+      clearInterval(timer);
+      this.voiceGeneration = null;
+      button.disabled = false;
+      button.textContent = 'Create another voice';
+    }
+  }
+
+  /** A new candidate on top of the list (the oldest ones beyond the limit go away). */
+  #addVoiceCandidate(cid, description) {
+    const list = $('voice-candidates');
+    const li = document.createElement('li');
+    const audio = document.createElement('audio');
+    audio.controls = true;
+    audio.src = this.#voiceUrl(`/candidates/${cid}`);
+    audio.setAttribute('aria-label', 'Voice option');
+    const note = document.createElement('span');
+    note.className = 'small muted';
+    note.textContent = description;
+    const keep = document.createElement('button');
+    keep.type = 'button';
+    keep.className = 'secondary small';
+    keep.textContent = 'Keep this voice';
+    keep.addEventListener('click', () => void this.#keepVoice(cid));
+    li.append(audio, note, keep);
+    list.prepend(li);
+    while (list.children.length > MAX_VOICE_CANDIDATES) list.lastElementChild.remove();
+    list.hidden = false;
+    // Play it right away (the browser may block it: the player is there anyway).
+    audio.play().catch(() => {});
+  }
+
+  async #keepVoice(cid) {
+    try {
+      await api(this.#voiceUrl(`/candidates/${cid}`), { method: 'POST' });
+      $('voice-candidates').hidden = true;
+      $('voice-candidates').replaceChildren();
+      $('voice-generate').textContent = 'Create her voice';
+      this.#showVoice(true);
+      this.#voiceStatus('Saved: she speaks with this voice now.');
+    } catch (err) {
+      this.#voiceStatus(err.message, true);
+    }
+  }
+
+  async #removeVoice() {
+    try {
+      await api(this.#voiceUrl(), { method: 'DELETE' });
+      this.#showVoice(false);
+      this.#voiceStatus('Removed. A new voice will be made from the description the next time she speaks.');
+    } catch (err) {
+      this.#voiceStatus(err.message, true);
+    }
+  }
+
+  #voiceStatus(text, isError = false) {
+    const node = $('voice-status');
+    node.textContent = text;
+    node.classList.toggle('error-text', isError);
   }
 
   // --------------------------------------------------------- lorebook --
@@ -271,8 +429,28 @@ export class CharacterEditor {
   }
 
   /** Under the face: is it used in her photos, and if not, why. */
-  #renderFaceUsage() {
-    const support = this.handlers.faceSupport();
+  /**
+   * Everything that depends on the art style: the appearance hint, whether
+   * pictures can be generated, and whether the face is kept in her photos.
+   */
+  #renderStyleHints() {
+    const artStyle = this.form.querySelector('input[name="artStyle"]:checked').value;
+    this.form.elements.namedItem('appearance').placeholder = APPEARANCE_HINTS[artStyle];
+    $('appearance-hint').textContent =
+      artStyle === 'anime'
+        ? 'Anime tags, comma separated: hair, eyes, build, distinctive details. No age or clothes.'
+        : 'Photo words, comma separated: age, hair, eyes, build, distinctive details. No clothes.';
+
+    const available = this.handlers.photosAvailable(artStyle);
+    for (const { prefix } of Object.values(PICTURES)) {
+      $(`${prefix}-generate`).disabled = !available;
+      $(`${prefix}-generate`).title = available
+        ? ''
+        : artStyle === 'anime'
+          ? 'Anime pictures need the anime model (npm run setup:images -- --anime)'
+          : 'Photos are not available right now';
+    }
+    const support = this.handlers.faceSupport(artStyle);
     $('face-usage').textContent = support?.ready
       ? 'Her avatar, and the face kept in every photo she sends.'
       : `Her avatar. To keep this face in her photos: ${support?.reason ?? 'photos are not available right now'}.`;
@@ -321,90 +499,109 @@ export class CharacterEditor {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
-  // ------------------------------------------------------------- face --
+  // --------------------------------------------------------- pictures --
+  // Two pictures per character, handled the same way: the reference face
+  // (element ids "face-…") and the chat background ("bg-…").
 
-  #faceUrl() {
+  #pictureUrl(kind) {
     // The query string defeats the browser cache after a change.
-    return `/api/characters/${encodeURIComponent(this.id)}/face?v=${Date.now()}`;
+    return `/api/characters/${encodeURIComponent(this.id)}/${kind}?v=${Date.now()}`;
   }
 
-  #showFace(hasFace) {
-    const preview = $('face-preview');
-    $('face-remove').hidden = !hasFace;
-    if (!hasFace) {
-      const empty = document.createElement('span');
-      empty.className = 'muted small';
-      empty.textContent = 'No face yet';
-      preview.replaceChildren(empty);
+  #showPicture(kind, has) {
+    const { prefix, empty, alt } = PICTURES[kind];
+    const preview = $(`${prefix}-preview`);
+    $(`${prefix}-remove`).hidden = !has;
+    if (!has) {
+      const span = document.createElement('span');
+      span.className = 'muted small';
+      span.textContent = empty;
+      preview.replaceChildren(span);
       return;
     }
     const img = document.createElement('img');
-    img.src = this.#faceUrl();
-    img.alt = 'Her reference face';
+    img.src = this.#pictureUrl(kind);
+    img.alt = alt;
     preview.replaceChildren(img);
   }
 
-  /** Portraits use the SAVED appearance: save the form first. */
-  async #generateFaces() {
+  #showFace(has) {
+    this.#showPicture('face', has);
+  }
+
+  /** Pictures use the SAVED card (appearance, style, scenario): save the form first. */
+  async #generate(kind) {
+    const { prefix, count, noun, pick } = PICTURES[kind];
     const appearance = this.form.elements.namedItem('appearance').value.trim();
     if (!appearance) {
-      this.#faceStatus('Describe her appearance first.', true);
+      this.#pictureStatus(kind, 'Describe her appearance first.', true);
       this.form.elements.namedItem('appearance').focus();
       return;
     }
-    const button = $('face-generate');
+    const button = $(`${prefix}-generate`);
     button.disabled = true;
     const started = Date.now();
-    const tick = () => this.#faceStatus(`Generating 4 faces… ${Math.round((Date.now() - started) / 1000)} s`);
+    const tick = () =>
+      this.#pictureStatus(kind, `Generating ${count} ${noun}… ${Math.round((Date.now() - started) / 1000)} s`);
     let timer;
     try {
       await this.#save();
       tick();
       timer = setInterval(tick, 1000);
       this.generation = new AbortController();
-      const res = await fetch(`/api/characters/${encodeURIComponent(this.id)}/face/candidates`, {
+      const res = await fetch(`/api/characters/${encodeURIComponent(this.id)}/${kind}/candidates`, {
         method: 'POST',
         signal: this.generation.signal,
       });
       await ensureOk(res);
       const { candidates } = await res.json();
-      this.#showCandidates(candidates);
-      this.#faceStatus('Pick the face you prefer.');
+      this.#showCandidates(kind, candidates);
+      this.#pictureStatus(kind, pick);
     } catch (err) {
-      this.#faceStatus(err.name === 'AbortError' ? 'Cancelled' : err.message, err.name !== 'AbortError');
+      this.#pictureStatus(kind, err.name === 'AbortError' ? 'Cancelled' : err.message, err.name !== 'AbortError');
     } finally {
       clearInterval(timer);
       this.generation = null;
-      button.disabled = !this.handlers.photosAvailable();
+      this.#renderStyleHints(); // re-enables the buttons if pictures are available
     }
   }
 
-  #showCandidates(ids) {
-    const box = $('face-candidates');
+  #showCandidates(kind, ids) {
+    const { prefix, alt } = PICTURES[kind];
+    const box = $(`${prefix}-candidates`);
     box.replaceChildren(
       ...ids.map((cid, i) => {
         const button = document.createElement('button');
         button.type = 'button';
-        button.setAttribute('aria-label', `Use face ${i + 1}`);
+        button.setAttribute('aria-label', `Use option ${i + 1}`);
         const img = document.createElement('img');
-        img.src = `/api/characters/${encodeURIComponent(this.id)}/face/candidates/${cid}`;
-        img.alt = `Face option ${i + 1}`;
+        img.src = `/api/characters/${encodeURIComponent(this.id)}/${kind}/candidates/${cid}`;
+        img.alt = `${alt}, option ${i + 1}`;
         button.append(img);
-        button.addEventListener('click', () => void this.#pickCandidate(cid));
+        button.addEventListener('click', () => void this.#pickCandidate(kind, cid));
         return button;
       }),
     );
     box.hidden = false;
   }
 
-  async #pickCandidate(cid) {
+  async #pickCandidate(kind, cid) {
     await this.#run(async () => {
-      await api(`/api/characters/${encodeURIComponent(this.id)}/face/candidates/${cid}`, { method: 'POST' });
-      $('face-candidates').hidden = true;
-      this.#showFace(true);
-      this.#faceStatus('Face saved');
-      this.handlers.onFaceChanged(this.id);
-    });
+      await api(`/api/characters/${encodeURIComponent(this.id)}/${kind}/candidates/${cid}`, { method: 'POST' });
+      $(`${PICTURES[kind].prefix}-candidates`).hidden = true;
+      this.#showPicture(kind, true);
+      this.#pictureStatus(kind, 'Saved');
+      this.handlers.onPictureChanged(this.id);
+    }, kind);
+  }
+
+  async #removePicture(kind) {
+    await this.#run(async () => {
+      await api(`/api/characters/${encodeURIComponent(this.id)}/${kind}`, { method: 'DELETE' });
+      this.#showPicture(kind, false);
+      this.#pictureStatus(kind, 'Removed');
+      this.handlers.onPictureChanged(this.id);
+    }, kind);
   }
 
   /** Real photos need an explicit attestation before the file picker opens. */
@@ -425,12 +622,12 @@ export class CharacterEditor {
     input.value = '';
     if (!file) return;
     if (file.size > 10 * 1024 * 1024) {
-      this.#faceStatus('This image is larger than 10 MB.', true);
+      this.#pictureStatus('face', 'This image is larger than 10 MB.', true);
       return;
     }
     await this.#run(async () => {
       await this.#save();
-      this.#faceStatus('Uploading…');
+      this.#pictureStatus('face', 'Uploading…');
       const res = await fetch(`/api/characters/${encodeURIComponent(this.id)}/face`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/octet-stream', 'x-girllm-consent': 'adult-and-consenting' },
@@ -438,28 +635,20 @@ export class CharacterEditor {
       });
       await ensureOk(res);
       this.#showFace(true);
-      this.#faceStatus('Face saved (metadata removed)');
-      this.handlers.onFaceChanged(this.id);
-    }, true);
-  }
-
-  async #removeFace() {
-    await this.#run(async () => {
-      await api(`/api/characters/${encodeURIComponent(this.id)}/face`, { method: 'DELETE' });
-      this.#showFace(false);
-      this.#faceStatus('Face removed');
-      this.handlers.onFaceChanged(this.id);
-    }, true);
+      this.#pictureStatus('face', 'Face saved (metadata removed)');
+      this.handlers.onPictureChanged(this.id);
+    }, 'face');
   }
 
   // ---------------------------------------------------------- helpers --
 
-  /** Run an action, reporting errors in the footer (or the face section). */
-  async #run(action, face = false) {
+  /** Run an action, reporting errors in the footer (or in a picture section). */
+  async #run(action, kind = null) {
     try {
       await action();
     } catch (err) {
-      (face ? this.#faceStatus : this.#status).call(this, err.message, true);
+      if (kind) this.#pictureStatus(kind, err.message, true);
+      else this.#status(err.message, true);
     }
   }
 
@@ -469,8 +658,8 @@ export class CharacterEditor {
     node.classList.toggle('error-text', isError);
   }
 
-  #faceStatus(text, isError = false) {
-    const node = $('face-status');
+  #pictureStatus(kind, text, isError = false) {
+    const node = $(`${PICTURES[kind].prefix}-status`);
     node.textContent = text;
     node.classList.toggle('error-text', isError);
   }

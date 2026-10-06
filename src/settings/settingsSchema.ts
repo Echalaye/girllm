@@ -6,8 +6,7 @@
  * context size, folders, providers) stays in `.env` only.
  */
 import { z } from 'zod';
-import { PHOTO_FREQUENCIES, type AppConfig } from '../config.js';
-import { TTS_VOICE_IDS, type TtsVoiceId } from '../voice/catalog.js';
+import { CHAT_BACKGROUNDS, PHOTO_FREQUENCIES, REALISTIC_ENGINES, type AppConfig } from '../config.js';
 
 /** Safe identifiers for model / checkpoint / sampler names (no quotes, no shell chars). */
 const modelName = z
@@ -46,8 +45,6 @@ export const SettingsSchema = z.object({
   /** Minutes of silence before she writes first; 0 = never. */
   proactiveAfterMinutes: z.number().int().min(0).max(10_080),
   // --- Voice
-  ttsVoice: z.enum(TTS_VOICE_IDS),
-  ttsSpeed: z.number().min(0.5).max(2),
   /** "" = auto-detect. */
   sttLanguage: z.string().regex(/^([a-z]{2})?$/, 'two-letter code like fr, or empty'),
   // --- Photos
@@ -64,8 +61,27 @@ export const SettingsSchema = z.object({
   imageHiresSteps: z.number().int().min(4).max(60),
   /** Reference face strength (IP-Adapter); 0 = off. */
   imageFaceWeight: z.number().min(0).max(1),
+  /** Face detail pass strength; 0 = off. */
+  imageDetailStrength: z.number().min(0).max(0.7),
   /** Photos she sends on her own. */
   photoFrequency: z.enum(PHOTO_FREQUENCIES),
+  /** Image model of realistic characters (FLUX.2 [klein] or the SDXL checkpoint). */
+  realisticEngine: z.enum(REALISTIC_ENGINES),
+  // --- Anime characters (their own image model)
+  /** "" = no anime photos. */
+  animeCheckpoint: fileName,
+  animeStyle: z.string().trim().max(500),
+  animeNegative: z.string().trim().max(1000),
+  animeSteps: z.number().int().min(1).max(100),
+  animeCfg: z.number().min(1).max(20),
+  animeSampler: identifier,
+  animeScheduler: identifier,
+  animeHiresScale: z.number().min(1).max(2),
+  animeFaceWeight: z.number().min(0).max(1),
+  animeDetailStrength: z.number().min(0).max(0.7),
+  // --- Interface
+  /** Her picture behind the chat. */
+  chatBackground: z.enum(CHAT_BACKGROUNDS),
 });
 
 export type Settings = z.infer<typeof SettingsSchema>;
@@ -90,8 +106,6 @@ export function defaultsFromConfig(config: AppConfig): Settings {
     repeatPenalty: g.repeatPenalty,
     maxReplyTokens: g.maxReplyTokens,
     proactiveAfterMinutes: config.proactiveAfterMinutes,
-    ttsVoice: config.voice.ttsVoice satisfies TtsVoiceId,
-    ttsSpeed: config.voice.ttsSpeed,
     sttLanguage: config.voice.sttLanguage,
     imageCheckpoint: i.checkpoint ?? '',
     imageStyle: i.style,
@@ -104,6 +118,19 @@ export function defaultsFromConfig(config: AppConfig): Settings {
     imageHiresDenoise: i.hires.denoise,
     imageHiresSteps: i.hires.steps,
     imageFaceWeight: i.faceWeight,
+    imageDetailStrength: i.detailStrength,
     photoFrequency: i.photoFrequency,
+    realisticEngine: i.realisticEngine,
+    animeCheckpoint: i.anime.checkpoint ?? '',
+    animeStyle: i.anime.style,
+    animeNegative: i.anime.negative,
+    animeSteps: i.anime.steps,
+    animeCfg: i.anime.cfg,
+    animeSampler: i.anime.sampler,
+    animeScheduler: i.anime.scheduler,
+    animeHiresScale: i.anime.hiresScale,
+    animeFaceWeight: i.anime.faceWeight,
+    animeDetailStrength: i.anime.detailStrength,
+    chatBackground: config.chatBackground,
   };
 }

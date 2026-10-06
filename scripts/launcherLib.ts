@@ -9,7 +9,18 @@ export interface Command {
   command: string;
   args: string[];
   cwd: string;
+  /** Extra environment variables (added to the launcher's own). */
+  env?: Record<string, string>;
 }
+
+/**
+ * ComfyUI's output goes to a log file, not a console: on Windows, Python then
+ * writes it in the ANSI code page (cp1252), and the first emoji a custom node
+ * prints ("✅ ComfyUI-Qwen-TTS loaded") raises UnicodeEncodeError, which
+ * ComfyUI's logger re-raises while reporting it: startup aborts. UTF-8 output
+ * (and UTF-8 mode for files) avoids it.
+ */
+export const COMFY_ENV: Readonly<Record<string, string>> = { PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' };
 
 /**
  * How to start ComfyUI from its install folder.
@@ -29,10 +40,16 @@ export function comfyCommand(
       command: embedded,
       args: ['-s', join('ComfyUI', 'main.py'), '--windows-standalone-build', ...flags],
       cwd: dir,
+      env: { ...COMFY_ENV },
     };
   }
   if (existsSync(join(dir, 'main.py'))) {
-    return { command: platform === 'win32' ? 'python' : 'python3', args: ['main.py', ...flags], cwd: dir };
+    return {
+      command: platform === 'win32' ? 'python' : 'python3',
+      args: ['main.py', ...flags],
+      cwd: dir,
+      env: { ...COMFY_ENV },
+    };
   }
   return undefined;
 }

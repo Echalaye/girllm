@@ -94,7 +94,12 @@ async function ensureComfy(url: string, dir: string | undefined, logsDir: string
   const logFile = join(logsDir, 'comfyui.log');
   log(`starting ComfyUI (log: ${logFile})…`);
   const out = createWriteStream(logFile, { flags: 'w' });
-  const child = spawn(cmd.command, cmd.args, { cwd: cmd.cwd, windowsHide: true });
+  // The log file is UTF-8 (see COMFY_ENV): custom nodes print emojis.
+  const child = spawn(cmd.command, cmd.args, {
+    cwd: cmd.cwd,
+    windowsHide: true,
+    env: { ...process.env, ...cmd.env },
+  });
   child.stdout.pipe(out);
   child.stderr.pipe(out);
   started.push({ name: 'ComfyUI', child });
