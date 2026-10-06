@@ -7,7 +7,6 @@
  */
 import { z } from 'zod';
 import { CHAT_BACKGROUNDS, PHOTO_FREQUENCIES, REALISTIC_ENGINES, type AppConfig } from '../config.js';
-import { TTS_VOICE_IDS, type TtsVoiceId } from '../voice/catalog.js';
 
 /** Safe identifiers for model / checkpoint / sampler names (no quotes, no shell chars). */
 const modelName = z
@@ -46,8 +45,6 @@ export const SettingsSchema = z.object({
   /** Minutes of silence before she writes first; 0 = never. */
   proactiveAfterMinutes: z.number().int().min(0).max(10_080),
   // --- Voice
-  ttsVoice: z.enum(TTS_VOICE_IDS),
-  ttsSpeed: z.number().min(0.5).max(2),
   /** "" = auto-detect. */
   sttLanguage: z.string().regex(/^([a-z]{2})?$/, 'two-letter code like fr, or empty'),
   // --- Photos
@@ -109,8 +106,6 @@ export function defaultsFromConfig(config: AppConfig): Settings {
     repeatPenalty: g.repeatPenalty,
     maxReplyTokens: g.maxReplyTokens,
     proactiveAfterMinutes: config.proactiveAfterMinutes,
-    ttsVoice: config.voice.ttsVoice satisfies TtsVoiceId,
-    ttsSpeed: config.voice.ttsSpeed,
     sttLanguage: config.voice.sttLanguage,
     imageCheckpoint: i.checkpoint ?? '',
     imageStyle: i.style,

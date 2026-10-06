@@ -21,8 +21,7 @@
  *
  * Nothing already installed is modified. Restart ComfyUI afterwards.
  */
-import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, renameSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { rename } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { loadConfig } from '../src/config.js';
@@ -30,68 +29,10 @@ import { ANIME_MODEL } from '../src/images/artStyle.js';
 import { FACE_DETECTOR_MODEL, faceDetectorPath } from '../src/images/faceDetector.js';
 import { FLUX2_KLEIN_BASE_MODEL, FLUX2_KLEIN_MODEL } from '../src/images/flux2Workflow.js';
 import { JUGGERNAUT_MODEL, OPTIONAL_MODELS } from '../src/images/presets.js';
-import { IPADAPTER_MODELS, IPADAPTER_NODES, type ComfyModelFile } from '../src/images/ipAdapter.js';
+import { IPADAPTER_MODELS, IPADAPTER_NODES } from '../src/images/ipAdapter.js';
+import { installModels, installNodePack } from './comfySetupLib.js';
 import { download } from './downloadLib.js';
 import { comfyRoot } from './launcherLib.js';
-
-/** Run git; returns its trimmed output, or throws with its error output. */
-function git(args: string[], cwd?: string): string {
-  const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
-  if (result.error) throw new Error(`git is required (https://git-scm.com/download): ${result.error.message}`);
-  if (result.status !== 0) throw new Error(`git ${args.join(' ')} failed:\n${result.stderr.trim()}`);
-  return result.stdout.trim();
-}
-
-function installNodes(root: string): void {
-  const target = join(root, 'custom_nodes', IPADAPTER_NODES.folder);
-  if (existsSync(target)) {
-    let head = '';
-    try {
-      head = git(['rev-parse', 'HEAD'], target);
-    } catch {
-      /* not a git checkout (e.g. installed from a zip): leave it alone */
-    }
-    const note =
-      head && head !== IPADAPTER_NODES.commit
-        ? ` (at ${head.slice(0, 7)}, tested with ${IPADAPTER_NODES.commit.slice(0, 7)})`
-        : '';
-    console.log(`✓ IP-Adapter nodes already installed${note}`);
-    return;
-  }
-  console.log(`↓ IP-Adapter nodes (${IPADAPTER_NODES.repo} @ ${IPADAPTER_NODES.commit.slice(0, 7)})`);
-  // Clone into a temporary folder, check out the pinned commit, then move
-  // into place: an interrupted install never leaves a half-cloned node.
-  const staging = `${target}.girllm-staging`;
-  rmSync(staging, { recursive: true, force: true });
-  try {
-    git(['clone', '--quiet', IPADAPTER_NODES.repo, staging]);
-    git(['-c', 'advice.detachedHead=false', 'checkout', '--quiet', IPADAPTER_NODES.commit], staging);
-    if (git(['rev-parse', 'HEAD'], staging) !== IPADAPTER_NODES.commit)
-      throw new Error('pinned commit not checked out');
-  } catch (err) {
-    rmSync(staging, { recursive: true, force: true });
-    throw err;
-  }
-  renameSync(staging, target); // atomic on the same volume
-  console.log('✓ IP-Adapter nodes installed');
-}
-
-async function installModels(root: string, models: readonly ComfyModelFile[]): Promise<void> {
-  for (const m of models) {
-    const dir = join(root, 'models', m.folder);
-    const dest = join(dir, m.file);
-    if (existsSync(dest)) {
-      console.log(`✓ ${m.file} already installed`);
-      continue;
-    }
-    mkdirSync(dir, { recursive: true });
-    console.log(`↓ ${m.file} (${m.sizeMb} MB) → models/${m.folder}`);
-    const part = `${dest}.part`;
-    await download(m.url, part, m.sha256);
-    await rename(part, dest);
-    console.log(`✓ ${m.file} installed (checksum verified)`);
-  }
-}
 
 /** The face detail pass detector runs in girllm itself: it goes to MODELS_DIR. */
 async function installFaceDetector(modelsDir: string): Promise<void> {
@@ -126,7 +67,7 @@ async function main(): Promise<void> {
   console.log(`ComfyUI: ${root}\n`);
 
   const optional = args.filter((a) => a in OPTIONAL_MODELS).flatMap((a) => OPTIONAL_MODELS[a]!);
-  installNodes(root);
+  installNodePack(root, IPADAPTER_NODES, 'IP-Adapter nodes');
   await installModels(root, [...IPADAPTER_MODELS, ...optional]);
   await installFaceDetector(resolve(config.voice.modelsDir));
 

@@ -1,5 +1,4 @@
 /** Voice abstractions: the HTTP layer only depends on these interfaces. */
-import type { TtsVoiceId } from './catalog.js';
 
 export interface AudioClip {
   /** Mono PCM in [-1, 1]. */
@@ -12,11 +11,14 @@ export interface SpeechToText {
   transcribe(audio: AudioClip): Promise<string>;
 }
 
+/** Her voice (step 7: Qwen3-TTS in ComfyUI, see speechService.ts). */
 export interface TextToSpeech {
-  /** @param voice optional voice id (a character's own voice); default = the configured one */
-  synthesize(text: string, voice?: TtsVoiceId): Promise<AudioClip>;
-  /** Is this voice downloaded? (optional: engines with a single voice can omit it) */
-  isInstalled?(voice: TtsVoiceId): boolean;
+  /** Can she speak right now? (checks ComfyUI: async) */
+  status(): Promise<VoiceComponentStatus>;
+  /** `text` in the character's voice, as FLAC; undefined when nothing is speakable. */
+  speak(characterId: string, text: string, signal?: AbortSignal): Promise<Buffer | undefined>;
+  /** Design a voice from a description, kept as a candidate. @returns its id. */
+  designCandidate(characterId: string, description: string, signal?: AbortSignal): Promise<string>;
 }
 
 export interface VoiceComponentStatus {
@@ -48,5 +50,5 @@ export interface WithStatus {
 /** Voice engines handed to the HTTP layer (absent when VOICE_ENABLED=false). */
 export interface VoiceServices {
   stt: SpeechToText & WithStatus;
-  tts: TextToSpeech & WithStatus;
+  tts: TextToSpeech;
 }

@@ -27,7 +27,8 @@
         "artStyle": "realistic",
         "gender": "female",
         "background": "scene",
-        "backgroundScene": "In her art gallery, she look at the camera, The light is soft, she wear a blue jean and a light gray pullover. The image show her at the center there's only one paint in the wall at her back"
+        "backgroundScene": "In her art gallery, she look at the camera, The light is soft, she wear a blue jean and a light gray pullover. The image show her at the center there's only one paint in the wall at her back",
+        "voiceDescription": "femme de 25 ans, voix calme et posé"
       }
     }
   }

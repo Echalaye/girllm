@@ -9,7 +9,6 @@
  * Spec: https://github.com/malfoyslastname/character-card-spec-v2
  */
 import { z } from 'zod';
-import { TTS_VOICE_IDS, type TtsVoiceId } from '../voice/catalog.js';
 import { ART_STYLES, GENDERS, type ArtStyle, type Gender } from '../images/artStyle.js';
 
 /** Generous but bounded: protects memory and the prompt token budget. */
@@ -95,8 +94,11 @@ export interface Character extends CardFields {
    * Community cards default to "roleplay", which is what they are written for.
    */
   style: CharacterStyle;
-  /** Her own voice (`extensions.girllm.voice`); undefined = the voice from the settings. */
-  voice: TtsVoiceId | undefined;
+  /**
+   * What her voice sounds like (`extensions.girllm.voiceDescription`, step 7),
+   * for Qwen3-TTS voice design; '' = a default voice for her gender.
+   */
+  voiceDescription: string;
   /** How she is drawn (`extensions.girllm.artStyle`): realistic photos (default) or anime. */
   artStyle: ArtStyle;
   /** For pictures (`extensions.girllm.gender`): 1girl/woman (default) or 1boy/man. */
@@ -144,11 +146,19 @@ function readEnum<T extends string>(extensions: Record<string, unknown>, key: st
   return (allowed as readonly unknown[]).includes(value) ? (value as T) : fallback;
 }
 
-/** Read `extensions.girllm.voice` (a known voice id, or undefined). */
-export function readVoice(extensions: Record<string, unknown>): TtsVoiceId | undefined {
+/** Longest voice description (same limit as the speech service). */
+export const MAX_VOICE_DESCRIPTION_CHARS = 500;
+
+/**
+ * Read `extensions.girllm.voiceDescription` ('' when absent). The step 3–6
+ * field `extensions.girllm.voice` (a Piper voice id) is ignored, and dropped
+ * when the card is saved.
+ */
+export function readVoiceDescription(extensions: Record<string, unknown>): string {
   const girllm = extensions.girllm;
-  const voice = girllm && typeof girllm === 'object' ? (girllm as { voice?: unknown }).voice : undefined;
-  return (TTS_VOICE_IDS as readonly unknown[]).includes(voice) ? (voice as TtsVoiceId) : undefined;
+  const value =
+    girllm && typeof girllm === 'object' ? (girllm as { voiceDescription?: unknown }).voiceDescription : undefined;
+  return typeof value === 'string' ? value.trim().slice(0, MAX_VOICE_DESCRIPTION_CHARS) : '';
 }
 
 /** Build the internal character from validated card fields (one place for every derived field). */
@@ -159,7 +169,7 @@ export function characterFromCard(fields: CardFields, id: string, sourceFile: st
     sourceFile,
     appearance: readAppearance(fields.extensions),
     style: readStyle(fields.extensions),
-    voice: readVoice(fields.extensions),
+    voiceDescription: readVoiceDescription(fields.extensions),
     ...readPictureFields(fields.extensions),
   };
 }
@@ -222,8 +232,8 @@ export const CharacterInputSchema = z.object({
   tags: z.array(z.string().trim().min(1).max(40)).max(20).default([]),
   style: z.enum(CHARACTER_STYLES).default('roleplay'),
   appearance: z.string().trim().max(MAX_APPEARANCE_CHARS).default(''),
-  /** Her own voice; '' = the voice from the settings. */
-  voice: z.union([z.enum(TTS_VOICE_IDS), z.literal('')]).default(''),
+  /** What her voice sounds like; '' = a default voice for her gender. */
+  voiceDescription: z.string().trim().max(MAX_VOICE_DESCRIPTION_CHARS).default(''),
   artStyle: z.enum(ART_STYLES).default('realistic'),
   gender: z.enum(GENDERS).default('female'),
   background: z.enum(BACKGROUND_MODES).default('scene'),
@@ -248,7 +258,7 @@ export function toInput(c: Character): CharacterInput {
     tags: c.tags,
     style: c.style,
     appearance: c.appearance,
-    voice: c.voice ?? '',
+    voiceDescription: c.voiceDescription,
     artStyle: c.artStyle,
     gender: c.gender,
     background: c.backgroundMode,

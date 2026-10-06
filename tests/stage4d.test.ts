@@ -1,6 +1,6 @@
 /**
  * Step 4d: she writes first, photos she decides to send, reference face
- * (IP-Adapter), per-character voice — service and HTTP level.
+ * (IP-Adapter) — service and HTTP level. (Her voice: tests/voice7.test.ts.)
  */
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -44,7 +44,7 @@ async function setup(o: SetupOptions = {}) {
   const { db } = makeStore();
   const store = new SqliteSessionStore(db, clock.now);
   const characters = CharacterRepository.fromCharacters([
-    makeCharacter({ first_mes: o.firstMes ?? '', appearance: 'woman, 26 years old, auburn hair', voice: 'fr-tom' }),
+    makeCharacter({ first_mes: o.firstMes ?? '', appearance: 'woman, 26 years old, auburn hair' }),
   ]);
   const raw = new ScriptedLlm({ chat: o.chat ?? 'Coucou !' });
   const gate = new GpuGate();
@@ -266,7 +266,7 @@ describe('reference face (IP-Adapter)', () => {
   });
 });
 
-describe('HTTP: initiate and per-character voice', () => {
+describe('HTTP: she writes first', () => {
   let app: FastifyInstance;
   afterEach(async () => {
     await app.close();
@@ -296,41 +296,5 @@ describe('HTTP: initiate and per-character voice', () => {
     expect((await post('opening')).statusCode).toBe(204);
     expect((await post('nudge')).statusCode).toBe(204);
     expect((await post('hello')).statusCode).toBe(400);
-  });
-
-  it("speaks with the character's own voice when it is installed", async () => {
-    const env = await setup();
-    const used: Array<string | undefined> = [];
-    app = await buildApp({
-      chat: env.chat,
-      characters: env.characters,
-      llm: new ScriptedLlm(),
-      memoryStore: new MemoryStore(env.db),
-      voice: {
-        stt: { status: () => ({ available: true, model: 'x' }), transcribe: async () => '' },
-        tts: {
-          status: () => ({ available: true, model: 'fr-siwis' }),
-          isInstalled: (v) => v !== 'en-amy',
-          synthesize: async (_t, voice) => {
-            used.push(voice);
-            return { samples: new Float32Array(10), sampleRate: 22050 };
-          },
-        },
-      },
-      allowedHosts: [HOST],
-      userName: 'Etienne',
-    });
-    const tts = (body: unknown) =>
-      app.inject({
-        method: 'POST',
-        url: '/api/tts',
-        headers: { host: HOST, 'content-type': 'application/json' },
-        payload: JSON.stringify(body),
-      });
-    await tts({ text: 'Bonjour', characterId: 'aria' });
-    await tts({ text: 'Bonjour' });
-    expect(used).toEqual(['fr-tom', undefined]);
-    const voices = (await app.inject({ method: 'GET', url: '/api/voice', headers: { host: HOST } })).json();
-    expect(voices.voices).toContainEqual({ id: 'en-amy', description: expect.any(String), installed: false });
   });
 });

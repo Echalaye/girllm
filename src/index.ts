@@ -14,7 +14,9 @@ import { createEmbeddingProvider, createLlmProvider } from './llm/createProvider
 import { MemoryService } from './memory/memoryService.js';
 import { MemoryStore } from './memory/memoryStore.js';
 import { defaultSummaryPolicy } from './memory/summarizer.js';
-import { SherpaSpeechToText, SherpaTextToSpeech } from './voice/sherpaVoice.js';
+import { SherpaSpeechToText } from './voice/sherpaVoice.js';
+import { SpeechService } from './voice/speechService.js';
+import { VoiceStore } from './voice/voiceStore.js';
 import type { VoiceServices } from './voice/types.js';
 import { ComfyClient } from './images/comfyClient.js';
 import { ImageService } from './images/imageService.js';
@@ -179,12 +181,11 @@ async function main(): Promise<void> {
     images,
   );
 
-  // Character editor: deleting a character cascades to its chats, photos,
-  // memories and reference face.
-  const characterService = new CharacterService(characters, chat, sessions, memoryStore, faces, backgrounds);
-
   const { voice: v } = config;
-  const voice: VoiceServices | undefined = v.enabled
+  // Her voice (step 7): Qwen3-TTS in ComfyUI, sharing the GPU gate with the
+  // photos (its own client: a long reply takes longer than a photo).
+  const voices = v.enabled ? new VoiceStore(v.voicesDir) : undefined;
+  const voice: VoiceServices | undefined = voices
     ? {
         stt: new SherpaSpeechToText(() => ({
           modelsDir: v.modelsDir,
@@ -192,14 +193,22 @@ async function main(): Promise<void> {
           language: S().sttLanguage,
           numThreads: v.threads,
         })),
-        tts: new SherpaTextToSpeech(() => ({
-          modelsDir: v.modelsDir,
-          voice: S().ttsVoice,
-          speed: S().ttsSpeed,
-          numThreads: v.threads,
-        })),
+        tts: new SpeechService({
+          comfy: new ComfyClient({ baseUrl: img.comfyUrl, timeoutMs: 300_000 }),
+          gate: gpu,
+          llm,
+          characters,
+          voices,
+          cacheDir: v.speechCacheDir,
+          log: memoryLog,
+          options: () => ({ replyLanguage: language() }),
+        }),
       }
     : undefined;
+
+  // Character editor: deleting a character cascades to its chats, photos,
+  // memories, reference face, background and voice.
+  const characterService = new CharacterService(characters, chat, sessions, memoryStore, faces, backgrounds, voices);
 
   const app = await buildApp({
     chat,
@@ -213,7 +222,7 @@ async function main(): Promise<void> {
     faces,
     backgrounds,
     settings,
-    voiceModelsDir: v.modelsDir,
+    voices,
     allowedHosts,
     userName: () => S().userName,
     logger: { level: process.env.LOG_LEVEL ?? 'info' },
@@ -251,7 +260,7 @@ async function main(): Promise<void> {
     const describe = (s: { available: boolean; model: string; reason?: string }) =>
       s.available ? s.model : `${s.model} — ${s.reason}`;
     app.log.info(
-      `Voice: speech-to-text ${describe(voice.stt.status())}, text-to-speech ${describe(voice.tts.status())}`,
+      `Voice: speech-to-text ${describe(voice.stt.status())}, her voice ${describe(await voice.tts.status())}`,
     );
   } else {
     app.log.info('Voice: off');

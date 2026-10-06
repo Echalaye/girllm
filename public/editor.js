@@ -1,7 +1,8 @@
-// Character editor: create / edit / delete / export a character, and pick
-// her reference face (generated portraits, or an uploaded photo after an
-// explicit consent step). All text goes through form values and
-// textContent; images are served by the local API.
+// Character editor: create / edit / delete / export a character, pick her
+// reference face (generated portraits, or an uploaded photo after an
+// explicit consent step), her chat background and her voice (designed from
+// a description, step 7). All text goes through form values and
+// textContent; images and audio are served by the local API.
 
 import { api, confirmAction, ensureOk, wireDialog } from './api.js';
 
@@ -17,7 +18,11 @@ const TEXT_FIELDS = [
   'post_history_instructions',
   'creator_notes',
   'appearance',
+  'voiceDescription',
 ];
+
+/** Voice candidates kept on screen to compare (newest first). */
+const MAX_VOICE_CANDIDATES = 3;
 
 const $ = (id) => document.getElementById(id);
 
@@ -55,7 +60,7 @@ export class CharacterEditor {
    *   onPictureChanged: (id: string) => void,
    *   photosAvailable: (artStyle?: string) => boolean,
    *   faceSupport: (artStyle: string) => { ready: boolean, reason?: string } | undefined,
-   *   voices: () => Array<{ id: string, description: string, installed: boolean }>,
+   *   voiceStatus: () => { available: boolean, reason?: string } | null,
    * }} handlers
    */
   constructor(handlers) {
@@ -65,6 +70,8 @@ export class CharacterEditor {
     this.id = null;
     /** Aborts a running portrait generation when the editor closes. */
     this.generation = null;
+    /** Aborts a running voice design when the editor closes. */
+    this.voiceGeneration = null;
     /** JSON of the form as last loaded or saved, to detect unsaved changes. */
     this.savedState = '';
     /**
@@ -78,6 +85,9 @@ export class CharacterEditor {
     wireDialog(this.dialog, { backdropClose: false, canClose: () => this.#confirmDiscard() });
     this.dialog.addEventListener('close', () => {
       this.generation?.abort();
+      this.voiceGeneration?.abort();
+      // Silence any voice preview still playing.
+      this.dialog.querySelectorAll('audio').forEach((a) => a.pause());
       // Closed with unsaved changes without choosing "Discard" (e.g. the
       // browser forced it): keep the draft for the next opening.
       this.draftKey = !this.discarded && this.#isDirty() ? (this.id ?? 'new') : null;
@@ -98,6 +108,8 @@ export class CharacterEditor {
       $(`${prefix}-generate`).addEventListener('click', () => void this.#generate(kind));
       $(`${prefix}-remove`).addEventListener('click', () => void this.#removePicture(kind));
     }
+    $('voice-generate').addEventListener('click', () => void this.#designVoice());
+    $('voice-remove').addEventListener('click', () => void this.#removeVoice());
     $('face-upload').addEventListener('click', () => void this.#askConsentThenPick());
     $('face-file').addEventListener('change', () => void this.#uploadFace());
     // The appearance hint and face note follow the art style.
@@ -133,7 +145,11 @@ export class CharacterEditor {
     }
     $('editor-title').textContent = id ? 'Edit character' : 'New character';
     $('editor-delete').hidden = $('editor-export').hidden = !id;
-    this.#renderVoices();
+    this.#showVoice(false);
+    this.#voiceStatus('');
+    $('voice-candidates').hidden = true;
+    $('voice-candidates').replaceChildren();
+    $('voice-generate').textContent = 'Create her voice';
     this.#renderLore([]);
     this.#renderStyleHints();
     this.dialog.showModal();
@@ -152,7 +168,7 @@ export class CharacterEditor {
       }
       this.form.elements.namedItem('background').value = data.card.background;
       this.form.elements.namedItem('backgroundScene').value = data.card.backgroundScene ?? '';
-      this.#renderVoices(data.card.voice);
+      this.#showVoice(Boolean(data.voice));
       this.#renderLore(data.card.lorebook ?? []);
       this.#renderStyleHints();
       this.#showPicture('face', data.hasFace);
@@ -202,36 +218,134 @@ export class CharacterEditor {
       .map((t) => t.trim())
       .filter(Boolean)
       .slice(0, 20);
-    card.voice = value('voice');
+    card.voiceDescription = card.voiceDescription.trim();
     card.lorebook = this.#collectLore();
     return card;
   }
 
   // ------------------------------------------------------------ voice --
+  // Her voice (step 7): Qwen3-TTS designs it from the description; the user
+  // listens to one or more candidates and keeps one. Every message she
+  // speaks is then said with that exact voice.
 
-  /** "Her voice" list: the default (from the settings) + every voice, uninstalled ones disabled. */
-  #renderVoices(selected = '') {
-    const select = $('editor-voice');
-    const option = (value, label, disabled = false) => {
-      const o = document.createElement('option');
-      o.value = value;
-      o.textContent = label;
-      o.disabled = disabled;
-      return o;
-    };
-    const voices = this.handlers.voices();
-    select.replaceChildren(
-      option('', 'Default voice (from the settings)'),
-      ...voices.map((v) =>
-        option(
-          v.id,
-          v.installed ? v.description : `${v.description} (not installed)`,
-          !v.installed && v.id !== selected,
-        ),
-      ),
-    );
-    select.value = selected;
-    select.disabled = voices.length === 0;
+  #voiceUrl(path = '') {
+    return `/api/characters/${encodeURIComponent(this.id)}/voice${path}`;
+  }
+
+  /** Her current voice: a player, or "No voice yet". */
+  #showVoice(has) {
+    $('voice-remove').hidden = !has;
+    const box = $('voice-current');
+    if (!has) {
+      const span = document.createElement('span');
+      span.className = 'muted small';
+      span.textContent = 'No voice yet';
+      box.replaceChildren(span);
+      return;
+    }
+    const audio = document.createElement('audio');
+    audio.controls = true;
+    audio.preload = 'none';
+    audio.src = `${this.#voiceUrl()}?v=${Date.now()}`; // fresh after a change
+    audio.setAttribute('aria-label', 'Her voice');
+    box.replaceChildren(audio);
+  }
+
+  /** The voice is designed from the SAVED card (her gender) and the description in the form. */
+  async #designVoice() {
+    const field = $('voice-description');
+    const description = field.value.trim();
+    if (!description) {
+      this.#voiceStatus('Describe her voice first.', true);
+      field.focus();
+      return;
+    }
+    const status = this.handlers.voiceStatus();
+    if (status && !status.available) {
+      this.#voiceStatus(`Her voice is unavailable: ${status.reason ?? 'not installed'}.`, true);
+      return;
+    }
+    const button = $('voice-generate');
+    button.disabled = true;
+    const started = Date.now();
+    const tick = () => this.#voiceStatus(`Creating her voice… ${Math.round((Date.now() - started) / 1000)} s`);
+    let timer;
+    try {
+      await this.#save();
+      tick();
+      timer = setInterval(tick, 1000);
+      this.voiceGeneration = new AbortController();
+      const res = await fetch(this.#voiceUrl('/candidates'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ description }),
+        signal: this.voiceGeneration.signal,
+      });
+      await ensureOk(res);
+      const { candidate } = await res.json();
+      this.#addVoiceCandidate(candidate, description);
+      this.#voiceStatus('Listen, then keep it, or create another one.');
+    } catch (err) {
+      this.#voiceStatus(err.name === 'AbortError' ? 'Cancelled' : err.message, err.name !== 'AbortError');
+    } finally {
+      clearInterval(timer);
+      this.voiceGeneration = null;
+      button.disabled = false;
+      button.textContent = 'Create another voice';
+    }
+  }
+
+  /** A new candidate on top of the list (the oldest ones beyond the limit go away). */
+  #addVoiceCandidate(cid, description) {
+    const list = $('voice-candidates');
+    const li = document.createElement('li');
+    const audio = document.createElement('audio');
+    audio.controls = true;
+    audio.src = this.#voiceUrl(`/candidates/${cid}`);
+    audio.setAttribute('aria-label', 'Voice option');
+    const note = document.createElement('span');
+    note.className = 'small muted';
+    note.textContent = description;
+    const keep = document.createElement('button');
+    keep.type = 'button';
+    keep.className = 'secondary small';
+    keep.textContent = 'Keep this voice';
+    keep.addEventListener('click', () => void this.#keepVoice(cid));
+    li.append(audio, note, keep);
+    list.prepend(li);
+    while (list.children.length > MAX_VOICE_CANDIDATES) list.lastElementChild.remove();
+    list.hidden = false;
+    // Play it right away (the browser may block it: the player is there anyway).
+    audio.play().catch(() => {});
+  }
+
+  async #keepVoice(cid) {
+    try {
+      await api(this.#voiceUrl(`/candidates/${cid}`), { method: 'POST' });
+      $('voice-candidates').hidden = true;
+      $('voice-candidates').replaceChildren();
+      $('voice-generate').textContent = 'Create her voice';
+      this.#showVoice(true);
+      this.#voiceStatus('Saved: she speaks with this voice now.');
+    } catch (err) {
+      this.#voiceStatus(err.message, true);
+    }
+  }
+
+  async #removeVoice() {
+    try {
+      await api(this.#voiceUrl(), { method: 'DELETE' });
+      this.#showVoice(false);
+      this.#voiceStatus('Removed. A new voice will be made from the description the next time she speaks.');
+    } catch (err) {
+      this.#voiceStatus(err.message, true);
+    }
+  }
+
+  #voiceStatus(text, isError = false) {
+    const node = $('voice-status');
+    node.textContent = text;
+    node.classList.toggle('error-text', isError);
   }
 
   // --------------------------------------------------------- lorebook --

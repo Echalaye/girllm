@@ -22,9 +22,11 @@ public/app.js (📷) ──► /api/sessions/:id/photo ──► chat.sendPhoto 
    safety.ts ─ photoPrompt.ts (LLM) ─ util/gpuGate.ts [unload LLM ─ images/comfyClient.ts ─ /free] ─► ComfyUI :8188
    PNG ─► data/images/<uuid>.png   metadata ─► images table   served by /api/images/:id
 
-Voice (step 3), CPU only:
-public/voice.js  (mic, playback queue) ──► /api/stt ──► voice/sherpaVoice.ts  Whisper ┐ sherpa-onnx-node
-public/speech.js (sentence splitter)   ──► /api/tts ──► voice/sherpaVoice.ts  Piper   ┘ models/ (setup:voice)
+Voice: speech-to-text on the CPU (step 3), her voice on the GPU (step 7):
+public/voice.js (mic) ──► /api/stt ──► voice/sherpaVoice.ts  Whisper (sherpa-onnx-node, models/)
+public/voice.js (🔊, playback queue) ──► /api/tts ──► voice/speechService.ts ─ cache data/speech-cache
+   voiceStore.ts (data/voices: her clip) ─ util/gpuGate.ts [unload LLM ─ comfyClient.ts ─ /free] ─► ComfyUI
+   (Qwen3-TTS nodes: voice clone; voice design for the editor)
 ```
 
 ## Modules
@@ -76,13 +78,18 @@ public/speech.js (sentence splitter)   ──► /api/tts ──► voice/sherpa
 | `src/images/flux2Workflow.ts`                         | FLUX.2 [klein] 4B (bench only): pinned files (model fp8, Qwen3 4B encoder, VAE) and the core-node graph, reference face via ReferenceLatent |
 | `scripts/compareImages.ts`, `imageBenchLib.ts`        | `npm run compare:images`: same shots and seeds through several models → HTML contact sheet                                                  |
 | `src/util/mutex.ts`                                   | One-at-a-time execution that returns each task's result or error to its own caller (voice engines)                                          |
-| `src/voice/catalog.ts`                                | Downloadable STT models and TTS voices: URL, pinned SHA-256, file layout                                                                    |
-| `src/voice/sherpaVoice.ts`                            | Whisper and Piper engines, loaded lazily on first use, one request at a time                                                                |
-| `src/voice/speechText.ts`                             | Strips `*actions*`, emojis, markdown and URLs before synthesis                                                                              |
-| `src/voice/wav.ts`                                    | 16-bit WAV encoding and float32 PCM decoding                                                                                                |
-| `scripts/setupVoice.ts`                               | `npm run setup:voice`: download, verify the checksum, then extract atomically                                                               |
-| `public/speech.js`                                    | `SentenceSplitter`: streamed text → speakable sentences (never cuts inside `*actions*` or before a closing `»`)                             |
-| `public/voice.js`                                     | `Recorder` (mic → 16 kHz mono float32) and `Speaker` (ordered playback queue, can be interrupted, `whenIdle()`)                             |
+| `src/voice/catalog.ts`                                | Downloadable Whisper models: URL, pinned SHA-256, file layout                                                                               |
+| `src/voice/sherpaVoice.ts`                            | Whisper engine, loaded lazily on first use, one request at a time                                                                           |
+| `src/voice/speechText.ts`                             | Strips `*actions*`, emojis, markdown and URLs before synthesis; drops Whisper hallucinations                                                |
+| `src/voice/wav.ts`                                    | float32 PCM decoding of speech-to-text uploads                                                                                              |
+| `src/voice/qwenTts.ts`                                | Qwen3-TTS (step 7): pinned node pack, model files and Python packages; language mapping; voice design and clone graphs                      |
+| `src/voice/speechService.ts`                          | Her voice: text cleanup, cache, automatic voice, exclusive GPU phase, voice candidates for the editor                                       |
+| `src/voice/voiceStore.ts`                             | Each character's reference clip + transcript (`data/voices`), editor candidates (1 h), atomic writes, validated ids                         |
+| `src/voice/voiceSafety.ts`                            | Adult voices only: minor / young-look / child-voice words, card age check, "adult" prefix                                                   |
+| `src/http/clientAbort.ts`                             | Cancels a long GPU request (photo, voice) when the browser disconnects                                                                      |
+| `scripts/setupVoice.ts`                               | `npm run setup:voice`: Whisper (download, checksum, atomic extract) and Qwen3-TTS into ComfyUI                                              |
+| `scripts/comfySetupLib.ts`                            | Shared by the setups: node pack at a pinned commit, verified model files, missing Python packages at exact versions                         |
+| `public/voice.js`                                     | `Recorder` (mic → 16 kHz mono float32) and `Speaker` (ordered playback, per-message progress, preparing/playing state, `whenIdle()`)        |
 | `public/vad.js`                                       | `Downsampler` (→ 16 kHz) and `VoiceActivityDetector` (adaptive noise floor, hysteresis, pre-roll); pure, unit-tested                        |
 | `public/pcm-capture.worklet.js`                       | AudioWorklet forwarding raw microphone samples in batches                                                                                   |
 | `public/call.js`                                      | `CallSession`: mic → worklet → VAD → utterances; paused while she thinks and speaks                                                         |
@@ -157,46 +164,51 @@ incompatible spaces. Old memories then rank by recency until they are re-learned
 
 ## HTTP API
 
-| Method | Path                                       | Body                                                                            | Response                                                                     |
-| ------ | ------------------------------------------ | ------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| GET    | `/api/health`                              | —                                                                               | `{ status, llm: { ok, models?, error? } }`                                   |
-| GET    | `/api/config`                              | —                                                                               | `{ userName, memoryEnabled }`                                                |
-| GET    | `/api/characters`                          | —                                                                               | `[{ id, name, creatorNotes, tags, style, hasFace }]`                         |
-| GET    | `/api/characters/:id/sessions`             | —                                                                               | `[{ id, title, createdAt, updatedAt, messageCount }]` (newest first)         |
-| POST   | `/api/sessions`                            | `{ characterId }`                                                               | `201 { session, character }`                                                 |
-| GET    | `/api/sessions/:id`                        | —                                                                               | `{ session (with summary, mood), character }`                                |
-| DELETE | `/api/sessions/:id`                        | —                                                                               | `204` (memories are kept)                                                    |
-| POST   | `/api/sessions/:id/messages`               | `{ text }` (1–8000 chars)                                                       | SSE stream                                                                   |
-| POST   | `/api/sessions/:id/regenerate`             | —                                                                               | SSE stream                                                                   |
-| GET    | `/api/characters/:id/memories`             | —                                                                               | `[{ id, category, content, createdAt, updatedAt }]`                          |
-| POST   | `/api/characters/:id/memories`             | `{ category, content }` (3–300 chars)                                           | `201`, or `409` if it duplicates an existing memory                          |
-| DELETE | `/api/memories/:id`                        | —                                                                               | `204`                                                                        |
-| GET    | `/api/images/status`                       | —                                                                               | `{ available, checkpoint?, reason? }`                                        |
-| POST   | `/api/sessions/:id/photo`                  | `{ request? }` (≤ 300 chars)                                                    | `{ message }` with `imageId` (20–60 s; cancelled if the client disconnects)  |
-| POST   | `/api/sessions/:id/images/:imageId/retake` | —                                                                               | `{ message }` with its new `imageId` (same scene, new seed; old one deleted) |
-| GET    | `/api/images/:id`                          | —                                                                               | `image/png`                                                                  |
-| GET    | `/api/voice`                               | —                                                                               | `{ stt: { available, model, reason? }, tts: {…} }`                           |
-| POST   | `/api/stt`                                 | `application/octet-stream`: float32 LE mono 16 kHz, ≤ 4 MB (~60 s)              | `{ text }` (empty if under 0.3 s)                                            |
-| POST   | `/api/tts`                                 | `{ text }` (1–1000 chars)                                                       | `audio/wav`, or `204` if nothing is speakable                                |
-| GET    | `/api/settings`                            | —                                                                               | `{ values, defaults, overridden, options: { models, checkpoints, voices } }` |
-| PUT    | `/api/settings`                            | partial settings (unknown keys refused)                                         | `{ values, defaults, overridden }`                                           |
-| POST   | `/api/settings/reset`                      | `{ keys? }`                                                                     | same; back to `.env` (all, or the listed keys)                               |
-| POST   | `/api/characters`                          | card fields (`name` required, `style`, `appearance`…)                           | `201` summary; `422` if she isn't an adult                                   |
-| GET    | `/api/characters/:id`                      | —                                                                               | summary + `card` (editable fields)                                           |
-| PUT    | `/api/characters/:id`                      | card fields                                                                     | summary (the id never changes)                                               |
-| DELETE | `/api/characters/:id`                      | —                                                                               | `{ deleted, chats, memories }` (cascade); `409` while generating             |
-| POST   | `/api/characters/import`                   | `application/octet-stream`: `.json` or `.png` card, ≤ 20 MB                     | `201` summary                                                                |
-| GET    | `/api/characters/:id/export`               | —                                                                               | Character Card V2 JSON (download)                                            |
-| GET    | `/api/characters/:id/face`                 | —                                                                               | `image/png` or `image/jpeg`                                                  |
-| PUT    | `/api/characters/:id/face`                 | octet-stream PNG/JPEG ≤ 10 MB + header `x-girllm-consent: adult-and-consenting` | `204`; `428` without the consent header                                      |
-| DELETE | `/api/characters/:id/face`                 | —                                                                               | `204`                                                                        |
-| POST   | `/api/characters/:id/face/candidates`      | — (uses the saved appearance)                                                   | `{ candidates: [uuid ×4] }` (cancelled if the client disconnects)            |
-| GET    | `/api/characters/:id/face/candidates/:cid` | —                                                                               | `image/png` (kept 1 h)                                                       |
-| POST   | `/api/characters/:id/face/candidates/:cid` | —                                                                               | `204`: the candidate becomes her face                                        |
+| Method | Path                                        | Body                                                                            | Response                                                                      |
+| ------ | ------------------------------------------- | ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| GET    | `/api/health`                               | —                                                                               | `{ status, llm: { ok, models?, error? } }`                                    |
+| GET    | `/api/config`                               | —                                                                               | `{ userName, memoryEnabled }`                                                 |
+| GET    | `/api/characters`                           | —                                                                               | `[{ id, name, creatorNotes, tags, style, hasFace }]`                          |
+| GET    | `/api/characters/:id/sessions`              | —                                                                               | `[{ id, title, createdAt, updatedAt, messageCount }]` (newest first)          |
+| POST   | `/api/sessions`                             | `{ characterId }`                                                               | `201 { session, character }`                                                  |
+| GET    | `/api/sessions/:id`                         | —                                                                               | `{ session (with summary, mood), character }`                                 |
+| DELETE | `/api/sessions/:id`                         | —                                                                               | `204` (memories are kept)                                                     |
+| POST   | `/api/sessions/:id/messages`                | `{ text }` (1–8000 chars)                                                       | SSE stream                                                                    |
+| POST   | `/api/sessions/:id/regenerate`              | —                                                                               | SSE stream                                                                    |
+| GET    | `/api/characters/:id/memories`              | —                                                                               | `[{ id, category, content, createdAt, updatedAt }]`                           |
+| POST   | `/api/characters/:id/memories`              | `{ category, content }` (3–300 chars)                                           | `201`, or `409` if it duplicates an existing memory                           |
+| DELETE | `/api/memories/:id`                         | —                                                                               | `204`                                                                         |
+| GET    | `/api/images/status`                        | —                                                                               | `{ available, checkpoint?, reason? }`                                         |
+| POST   | `/api/sessions/:id/photo`                   | `{ request? }` (≤ 300 chars)                                                    | `{ message }` with `imageId` (20–60 s; cancelled if the client disconnects)   |
+| POST   | `/api/sessions/:id/images/:imageId/retake`  | —                                                                               | `{ message }` with its new `imageId` (same scene, new seed; old one deleted)  |
+| GET    | `/api/images/:id`                           | —                                                                               | `image/png`                                                                   |
+| GET    | `/api/voice`                                | —                                                                               | `{ stt: { available, model, reason? }, tts: {…} }` (tts checks ComfyUI)       |
+| POST   | `/api/stt`                                  | `application/octet-stream`: float32 LE mono 16 kHz, ≤ 4 MB (~60 s)              | `{ text }` (empty if under 0.3 s)                                             |
+| POST   | `/api/tts`                                  | `{ text, characterId }` (text 1–6000 chars, spoken up to 1500)                  | `audio/flac` in her voice, or `204` if nothing is speakable                   |
+| GET    | `/api/settings`                             | —                                                                               | `{ values, defaults, overridden, options: { models, checkpoints, presets } }` |
+| PUT    | `/api/settings`                             | partial settings (unknown keys refused)                                         | `{ values, defaults, overridden }`                                            |
+| POST   | `/api/settings/reset`                       | `{ keys? }`                                                                     | same; back to `.env` (all, or the listed keys)                                |
+| POST   | `/api/characters`                           | card fields (`name` required, `style`, `appearance`…)                           | `201` summary; `422` if she isn't an adult                                    |
+| GET    | `/api/characters/:id`                       | —                                                                               | summary + `card` (editable fields) + `voice` (`{ description, createdAt }`)   |
+| PUT    | `/api/characters/:id`                       | card fields                                                                     | summary (the id never changes)                                                |
+| DELETE | `/api/characters/:id`                       | —                                                                               | `{ deleted, chats, memories }` (cascade); `409` while generating              |
+| POST   | `/api/characters/import`                    | `application/octet-stream`: `.json` or `.png` card, ≤ 20 MB                     | `201` summary                                                                 |
+| GET    | `/api/characters/:id/export`                | —                                                                               | Character Card V2 JSON (download)                                             |
+| GET    | `/api/characters/:id/face`                  | —                                                                               | `image/png` or `image/jpeg`                                                   |
+| PUT    | `/api/characters/:id/face`                  | octet-stream PNG/JPEG ≤ 10 MB + header `x-girllm-consent: adult-and-consenting` | `204`; `428` without the consent header                                       |
+| DELETE | `/api/characters/:id/face`                  | —                                                                               | `204`                                                                         |
+| POST   | `/api/characters/:id/face/candidates`       | — (uses the saved appearance)                                                   | `{ candidates: [uuid ×4] }` (cancelled if the client disconnects)             |
+| GET    | `/api/characters/:id/face/candidates/:cid`  | —                                                                               | `image/png` (kept 1 h)                                                        |
+| POST   | `/api/characters/:id/face/candidates/:cid`  | —                                                                               | `204`: the candidate becomes her face                                         |
+| GET    | `/api/characters/:id/voice`                 | —                                                                               | `audio/flac`: her reference clip; `404` before she has one                    |
+| DELETE | `/api/characters/:id/voice`                 | —                                                                               | `204` (a new voice is made the next time she speaks)                          |
+| POST   | `/api/characters/:id/voice/candidates`      | `{ description }` (1–500 chars)                                                 | `{ candidate: uuid }` (GPU; cancelled if the client disconnects)              |
+| GET    | `/api/characters/:id/voice/candidates/:cid` | —                                                                               | `audio/flac` (kept 1 h)                                                       |
+| POST   | `/api/characters/:id/voice/candidates/:cid` | —                                                                               | `204`: the candidate becomes her voice                                        |
 
 Error statuses: `400` invalid input · `403` cross-origin · `404` not found · `409` already generating or duplicate ·
-`413` prompt or upload too large · `415` wrong content type · `421` wrong Host · `422` photo or character refused
-(safety) · `428` face upload without consent ·
+`413` prompt or upload too large · `415` wrong content type · `421` wrong Host · `422` photo, voice or character
+refused (safety) · `428` face upload without consent ·
 `502` LLM backend or ComfyUI error · `503` voice/photos not installed or disabled.
 
 ## Tooling
@@ -254,10 +266,14 @@ this rule in every configuration.
 - **sherpa-onnx for voice instead of kokoro-js or transformers.js**: kokoro-js only ships English voices, while
   sherpa-onnx offers Whisper plus several French Piper voices. It's native ONNX Runtime, prebuilt for Windows, with
   async calls that don't block the event loop and no Python.
-- **Voice on the CPU**: a 12B model already fills 8 GB of VRAM, and Whisper base and Piper are fast enough on a
+- **Speech-to-text on the CPU**: a 12B model already fills 8 GB of VRAM, and Whisper base is fast enough on a
   6-core CPU.
-- **Sentence splitting in the browser**: the SSE protocol stays unchanged and TTS remains optional. The browser sends
-  each sentence as soon as it's complete and plays the clips in order, while the server synthesizes one at a time.
+- **Her voice on the GPU, through ComfyUI (step 7)**: Piper sounded robotic and had a handful of fixed voices.
+  Qwen3-TTS 1.7B (Apache 2.0, French) designs a voice from words and clones it for every message, but needs the GPU:
+  it takes the same exclusive phase as photos (LLM unloaded, ComfyUI freed after). Running it as a ComfyUI custom
+  node reuses ComfyUI's Python/PyTorch, its job queue and our existing client, instead of a second Python service.
+  The cost: whole messages instead of sentence-by-sentence streaming (one GPU swap per message), a cache so a replay
+  is free, and an on-demand 🔊 so the GPU is only used when she is listened to.
 - **Raw float32 PCM upload for speech-to-text**: the browser already decodes and resamples, so the server needs no
   ffmpeg or audio codec.
 
@@ -272,6 +288,46 @@ this rule in every configuration.
 - **A message cursor (`seq`) instead of flags on each message**: "what's new since X" is one indexed range query.
 - **Fastify, no LLM SDK, estimated tokens, separate connect and generation timeouts**: unchanged from step 1.
   The OpenAI streaming protocol is around 60 lines with `fetch`, and token estimates are deliberately pessimistic.
+
+## Step 7: her voice (Qwen3-TTS)
+
+**Install.** `setup:voice` (scripts/setupVoice.ts + comfySetupLib.ts) clones flybirdxx/ComfyUI-Qwen-TTS at
+`QWEN_TTS_NODES.commit`, downloads `QWEN_TTS_BASE_FILES` and `QWEN_TTS_DESIGN_FILES` into
+`ComfyUI/models/qwen-tts/<repo name>/` (the nodes pick the folder whose name contains "1.7B" and the model type),
+creates `qwen-tts/Qwen3-TTS-Tokenizer-12Hz` with a README (otherwise the nodes download it, unpinned, although
+inference uses each model's `speech_tokenizer/`), and pip-installs into `python_embeded` only the
+`QWEN_TTS_PYTHON_PACKAGES` whose module doesn't import, plus `transformers==4.57.3` when older than 4.57. Specs must
+be exact (`name==x.y.z`), checked before pip runs. Small config files have `sha256: null`: their URL is pinned to a
+Hugging Face commit, and `download()` refuses more than 10 MB without a hash.
+
+**Graphs** (`qwenTts.ts`). Design: `FB_Qwen3TTSVoiceDesign(text = voiceSampleText(language), instruct =
+adultVoicePrefix + description)` → `SaveAudio`. Clone: `LoadAudio(her clip)` → `FB_Qwen3TTSVoiceClone(target_text,
+ref_audio, ref_text = the clip's words, x_vector_only false)` → `SaveAudio`. Both: 1.7B, bf16, `attention: sdpa` (not `auto`, which prefers a monkeypatched SageAttention),
+`unload_model_after_generate: true` (the nodes cache models in a global that ComfyUI's `/free` doesn't clear), random
+seed, `max_new_tokens` 2048 (~2.7 min). `ComfyClient.generateAudio` reads the `audio` output of `/history` and
+checks the `fLaC` magic and ≤ 50 MB; `uploadFile` sends the clip through `/upload/image` (ComfyUI's own page does
+the same for audio); `qwenTtsSupport` checks the two node classes, their expected inputs, `LoadAudio` and
+`SaveAudio`.
+
+**SpeechService.speak(characterId, text).** `prepareSpeech` (cleanForSpeech, cut at the last sentence end before
+1500 chars) → '' = `204`. Card age check (`assertCardVoiceSafe`). Her clip from `VoiceStore`, or `autoVoice`: design
+from `voiceDescription` or `DEFAULT_VOICE_DESCRIPTION[gender]`, saved directly (one at a time per character). Cache
+key = sha256(clip hash, language, text) → `data/speech-cache/<key>.flac`; identical concurrent requests share one
+job (`inFlight`). `onGpu`: status first (fails fast with `VoiceUnavailableError`, nothing unloaded), then
+`gate.runExclusive`: `llm.unload()`, upload `girllm_voice_<id>_<hash16>.flac`, clone, `comfy.free()` in `finally`.
+Cache pruned to the newest 300 clips. Status cached 60 s when ready, 5 s when not (ComfyUI often starts after
+girllm). Language: `qwenLanguage(replyLanguage)` ("French", "français", "fr" → French; unknown → Auto).
+
+**Editor.** `designCandidate` → `VoiceStore.addCandidate` (FLAC + JSON with the words, description, language);
+the page keeps the last 3 to compare; `promote` copies one to `data/voices/<id>.flac/json`. Deleting a character
+removes her voice (`CharacterService`). The card keeps only `extensions.girllm.voiceDescription`; the step 3
+`voice` id is deleted on save.
+
+**Page.** Every message of hers has a 🔊 (`.speak`, shown when `/api/voice` says tts is available; checked again
+every 30 s otherwise). `speakMessage` stops what's playing and enqueues the message's raw text (`data-text`); the
+button shows loading / playing; a second click stops. "Voice on", photos and calls call it once the reply is done.
+`Speaker` aborts the pending `/api/tts` fetch on `stop()` (the server then cancels the ComfyUI job), reports
+`preparing`/`playing` (presence "recording a voice message…", call screen "about to answer…" / "talking").
 
 ## Step 4d flows
 

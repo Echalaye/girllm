@@ -2,16 +2,17 @@
  * Minimal client for the ComfyUI HTTP API:
  *   POST /prompt          queue a workflow (API format)
  *   GET  /history/{id}    poll until it is done
- *   GET  /view?...        download the resulting image
+ *   GET  /view?...        download the resulting image (or audio: her voice, step 7)
  *   POST /free            unload models / free VRAM
  *   POST /interrupt       cancel the running job
  *   GET  /object_info/... list installed checkpoints and custom nodes (health check)
- *   POST /upload/image    put the reference face in ComfyUI's input folder
+ *   POST /upload/image    put the reference face (or voice clip) in ComfyUI's input folder
  *
  * Polling /history (instead of the progress websocket) keeps this small and
  * dependency-free; at one request every 500 ms the overhead is negligible.
  */
 import { setTimeout as sleep } from 'node:timers/promises';
+import { QWEN_TTS_NODE_CLASSES } from '../voice/qwenTts.js';
 import { CLIP_VISION_MODEL, FACE_IPADAPTER_MODEL } from './ipAdapter.js';
 import type { ComfyWorkflow } from './workflow.js';
 
@@ -24,14 +25,34 @@ export interface ComfyClientOptions {
   fetchImpl?: typeof fetch;
 }
 
-interface HistoryEntry {
-  status?: { status_str?: string; completed?: boolean; messages?: unknown[] };
-  outputs?: Record<string, { images?: Array<{ filename: string; subfolder: string; type: string }> }>;
+interface OutputFile {
+  filename: string;
+  subfolder: string;
+  type: string;
 }
 
-const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-/** Upper bound for a downloaded image (an SDXL PNG is ~1-3 MB). */
-const MAX_IMAGE_BYTES = 30 * 1024 * 1024;
+interface HistoryEntry {
+  status?: { status_str?: string; completed?: boolean; messages?: unknown[] };
+  /** SaveImage outputs `images`, SaveAudio outputs `audio`. */
+  outputs?: Record<string, { images?: OutputFile[]; audio?: OutputFile[] }>;
+}
+
+/** What a job produces, how it is recognised, and how big it may be. */
+const OUTPUT_KINDS = {
+  // An SDXL / FLUX PNG is ~1-3 MB.
+  image: {
+    key: 'images',
+    signature: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    maxBytes: 30 << 20,
+    label: 'a PNG image',
+  },
+  // FLAC, 24 kHz mono: ~0.1 MB per second of speech; 2.7 minutes max.
+  audio: { key: 'audio', signature: Buffer.from('fLaC', 'ascii'), maxBytes: 50 << 20, label: 'a FLAC audio file' },
+} as const;
+type OutputKind = keyof typeof OUTPUT_KINDS;
+
+/** Upload content types accepted by uploadFile. */
+export type UploadType = 'image/png' | 'image/jpeg' | 'audio/flac';
 
 export class ComfyError extends Error {
   constructor(message: string) {
@@ -127,10 +148,49 @@ export class ComfyClient {
   }
 
   /**
+   * Can ComfyUI speak with Qwen3-TTS? (the two nodes, in the version the
+   * workflows were written for, plus core LoadAudio / SaveAudio). The model
+   * files can't be listed over HTTP: a missing one shows up as a job error.
+   */
+  async qwenTtsSupport(): Promise<{ ready: boolean; reason?: string }> {
+    const setup = 'run: npm run setup:voice, then restart ComfyUI';
+    const expected: Record<string, string[]> = {
+      [QWEN_TTS_NODE_CLASSES.clone]: [
+        'target_text',
+        'ref_audio',
+        'ref_text',
+        'language',
+        'unload_model_after_generate',
+      ],
+      [QWEN_TTS_NODE_CLASSES.design]: ['text', 'instruct', 'language', 'unload_model_after_generate'],
+    };
+    for (const [node, inputs] of Object.entries(expected)) {
+      const info = await this.nodeInputs(node);
+      if (!info) return { ready: false, reason: `Qwen3-TTS nodes not installed (${setup})` };
+      const missing = inputs.filter((k) => !(k in info));
+      if (missing.length)
+        return { ready: false, reason: `unexpected Qwen3-TTS nodes version (missing ${missing.join(', ')})` };
+    }
+    if (!(await this.nodeInputs('LoadAudio')) || !(await this.nodeInputs('SaveAudio'))) {
+      return { ready: false, reason: 'this ComfyUI has no audio nodes (update ComfyUI)' };
+    }
+    return { ready: true };
+  }
+
+  /**
    * Upload an image into ComfyUI's input folder (overwriting a file with the
    * same name). @returns the name to give to a LoadImage node.
    */
-  async uploadImage(bytes: Buffer, fileName: string, type: 'image/png' | 'image/jpeg'): Promise<string> {
+  uploadImage(bytes: Buffer, fileName: string, type: 'image/png' | 'image/jpeg'): Promise<string> {
+    return this.uploadFile(bytes, fileName, type);
+  }
+
+  /**
+   * Upload a file into ComfyUI's input folder (overwriting a file with the
+   * same name). ComfyUI's /upload/image endpoint takes audio too (its own
+   * page uploads audio there). @returns the name for LoadImage / LoadAudio.
+   */
+  async uploadFile(bytes: Buffer, fileName: string, type: UploadType): Promise<string> {
     const form = new FormData();
     form.append('image', new Blob([new Uint8Array(bytes)], { type }), fileName);
     form.append('type', 'input');
@@ -140,7 +200,10 @@ export class ComfyClient {
       body: form,
       signal: AbortSignal.timeout(30_000),
     });
-    if (!res.ok) throw new ComfyError(`ComfyUI refused the reference face (${res.status})`);
+    if (!res.ok)
+      throw new ComfyError(
+        `ComfyUI refused the uploaded ${type.startsWith('audio') ? 'voice clip' : 'reference face'} (${res.status})`,
+      );
     const body = (await res.json().catch(() => ({}))) as { name?: string; subfolder?: string };
     if (!body.name) throw new ComfyError('ComfyUI did not return the uploaded file name');
     return body.subfolder ? `${body.subfolder}/${body.name}` : body.name;
@@ -165,19 +228,29 @@ export class ComfyClient {
   }
 
   /** Run a workflow and return the first output image as PNG bytes. */
-  async generate(workflow: ComfyWorkflow, signal?: AbortSignal): Promise<Buffer> {
+  generate(workflow: ComfyWorkflow, signal?: AbortSignal): Promise<Buffer> {
+    return this.run(workflow, 'image', signal);
+  }
+
+  /** Run a workflow and return the first output audio as FLAC bytes (SaveAudio). */
+  generateAudio(workflow: ComfyWorkflow, signal?: AbortSignal): Promise<Buffer> {
+    return this.run(workflow, 'audio', signal);
+  }
+
+  private async run(workflow: ComfyWorkflow, kind: OutputKind, signal?: AbortSignal): Promise<Buffer> {
     const deadline = AbortSignal.timeout(this.timeoutMs);
     const abort = signal ? AbortSignal.any([signal, deadline]) : deadline;
+    const { key } = OUTPUT_KINDS[kind];
 
     const promptId = await this.queue(workflow, abort);
     try {
       const entry = await this.waitForCompletion(promptId, abort);
-      const image = Object.values(entry.outputs ?? {}).flatMap((o) => o.images ?? [])[0];
-      if (!image) throw new ComfyError('ComfyUI finished without producing an image');
-      return await this.download(image, abort);
+      const file = Object.values(entry.outputs ?? {}).flatMap((o) => o[key] ?? [])[0];
+      if (!file) throw new ComfyError(`ComfyUI finished without producing ${kind === 'image' ? 'an image' : 'audio'}`);
+      return await this.download(file, kind, abort);
     } catch (err) {
       if (abort.aborted) await this.cancel(promptId);
-      throw deadline.aborted ? new ComfyError('Image generation timed out') : err;
+      throw deadline.aborted ? new ComfyError(`${kind === 'image' ? 'Image' : 'Voice'} generation timed out`) : err;
     }
   }
 
@@ -230,16 +303,15 @@ export class ComfyClient {
     }
   }
 
-  private async download(
-    image: { filename: string; subfolder: string; type: string },
-    signal: AbortSignal,
-  ): Promise<Buffer> {
-    const query = new URLSearchParams({ filename: image.filename, subfolder: image.subfolder, type: image.type });
+  /** Download an output file and check it is what was expected (magic bytes, size). */
+  private async download(file: OutputFile, kind: OutputKind, signal: AbortSignal): Promise<Buffer> {
+    const { signature, maxBytes, label } = OUTPUT_KINDS[kind];
+    const query = new URLSearchParams({ filename: file.filename, subfolder: file.subfolder, type: file.type });
     const res = await this.fetchImpl(`${this.opts.baseUrl}/view?${query.toString()}`, { signal });
-    if (!res.ok) throw new ComfyError(`Cannot download the image (${res.status})`);
+    if (!res.ok) throw new ComfyError(`Cannot download the ${kind} (${res.status})`);
     const bytes = Buffer.from(await res.arrayBuffer());
-    if (bytes.length > MAX_IMAGE_BYTES || !bytes.subarray(0, 8).equals(PNG_SIGNATURE)) {
-      throw new ComfyError('ComfyUI returned something that is not a PNG image');
+    if (bytes.length > maxBytes || !bytes.subarray(0, signature.length).equals(signature)) {
+      throw new ComfyError(`ComfyUI returned something that is not ${label}`);
     }
     return bytes;
   }

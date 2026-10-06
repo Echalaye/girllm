@@ -77,9 +77,13 @@ export class Recorder {
 }
 
 /**
- * Plays spoken sentences in order. Synthesis requests start immediately
- * (the server processes them one by one) so the next sentence is usually
- * ready when the current one ends.
+ * Plays her spoken messages in order (step 7: one clip per message, made by
+ * Qwen3-TTS on the GPU, which takes a few seconds unless it is cached).
+ * Each item can follow its own progress (the 🔊 button of a message), and
+ * the page follows the overall state (portrait, call screen).
+ *
+ * @typedef {{ onLoading?: () => void, onPlay?: () => void, onDone?: () => void }} ItemHooks
+ * @typedef {'idle' | 'preparing' | 'playing'} SpeakerState
  */
 export class Speaker {
   #queue = [];
@@ -89,15 +93,43 @@ export class Speaker {
   #endCurrent = null;
   /** Resolvers waiting for the queue to drain (see whenIdle). */
   #idleWaiters = [];
+  /** @type {SpeakerState} */
+  #state = 'idle';
 
-  /** @param {(text: string) => Promise<Blob | null>} synthesize */
-  constructor(synthesize) {
+  /**
+   * @param {(text: string, signal: AbortSignal) => Promise<Blob | null>} synthesize
+   * @param {{ onState?: (state: SpeakerState) => void, onError?: (err: Error) => void }} [handlers]
+   */
+  constructor(synthesize, handlers = {}) {
     this.synthesize = synthesize;
+    this.handlers = handlers;
+    this.controller = new AbortController();
   }
 
-  enqueue(text) {
-    const item = { generation: this.#generation, audio: this.synthesize(text).catch(() => null) };
-    this.#queue.push(item);
+  get state() {
+    return this.#state;
+  }
+
+  /** @param {string} text  @param {ItemHooks} [hooks] */
+  enqueue(text, { onLoading, onPlay, onDone } = {}) {
+    // onDone may be reached twice (stop() during preparation): run it once.
+    let finished = false;
+    const hooks = {
+      onPlay,
+      onDone: () => {
+        if (finished) return;
+        finished = true;
+        onDone?.();
+      },
+    };
+    const signal = this.controller.signal;
+    const audio = this.synthesize(text, signal).catch((err) => {
+      if (err.name !== 'AbortError') this.handlers.onError?.(err);
+      return null;
+    });
+    this.#queue.push({ generation: this.#generation, audio, hooks });
+    onLoading?.();
+    this.#setState(this.#playing ? this.#state : 'preparing');
     void this.#pump();
   }
 
@@ -112,10 +144,12 @@ export class Speaker {
     return new Promise((resolve) => this.#idleWaiters.push(resolve));
   }
 
-  /** Silence immediately and drop everything queued. */
+  /** Silence immediately, cancel what is being prepared and drop everything queued. */
   stop() {
     this.#generation++;
-    this.#queue = [];
+    this.controller.abort();
+    this.controller = new AbortController();
+    for (const item of this.#queue.splice(0)) item.hooks.onDone?.();
     this.#audio.pause();
     this.#endCurrent?.();
   }
@@ -125,14 +159,25 @@ export class Speaker {
     this.#playing = true;
     try {
       while (this.#queue.length) {
-        const item = this.#queue.shift();
+        const item = this.#queue[0];
+        this.#setState('preparing');
         const blob = await item.audio;
-        if (!blob || item.generation !== this.#generation) continue;
+        if (this.#queue[0] === item) this.#queue.shift(); // stop() may have emptied the queue
+        if (!blob || item.generation !== this.#generation) {
+          item.hooks.onDone?.();
+          continue;
+        }
+        item.hooks.onPlay?.();
+        this.#setState('playing');
         await this.#play(blob);
+        item.hooks.onDone?.();
       }
     } finally {
       this.#playing = false;
-      if (!this.#queue.length) this.#idleWaiters.splice(0).forEach((resolve) => resolve());
+      if (!this.#queue.length) {
+        this.#setState('idle');
+        this.#idleWaiters.splice(0).forEach((resolve) => resolve());
+      }
     }
   }
 
@@ -150,5 +195,11 @@ export class Speaker {
       this.#audio.src = url;
       this.#audio.play().catch(done); // autoplay blocked -> skip, don't hang
     });
+  }
+
+  #setState(state) {
+    if (state === this.#state) return;
+    this.#state = state;
+    this.handlers.onState?.(state);
   }
 }

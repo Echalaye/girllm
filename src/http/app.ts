@@ -43,10 +43,13 @@ import type { FaceStore } from '../characters/faceStore.js';
 import { InvalidImageError } from '../images/imageSanitizer.js';
 import { SettingsValidationError, type SettingsService } from '../settings/settingsService.js';
 import { resolve, type Live } from '../util/resolve.js';
-import { cleanForSpeech, cleanTranscript, MAX_TTS_CHARS } from '../voice/speechText.js';
-import { TTS_VOICE_IDS, TTS_VOICES } from '../voice/catalog.js';
+import { cleanTranscript } from '../voice/speechText.js';
+import { MAX_SPEECH_CHARS } from '../voice/speechService.js';
 import { VoiceUnavailableError, type VoiceServices, type VoiceStatus } from '../voice/types.js';
-import { decodeFloat32, encodeWav16 } from '../voice/wav.js';
+import { VoiceRefusedError } from '../voice/voiceSafety.js';
+import { withClientAbort } from './clientAbort.js';
+import type { VoiceStore } from '../voice/voiceStore.js';
+import { decodeFloat32 } from '../voice/wav.js';
 
 export interface AppDeps {
   chat: ChatService;
@@ -67,8 +70,8 @@ export interface AppDeps {
   backgrounds?: FaceStore | undefined;
   /** Live settings (optional so tests can build a minimal app). */
   settings?: SettingsService | undefined;
-  /** MODELS_DIR (voice models), for the settings' voice list. */
-  voiceModelsDir?: string;
+  /** Characters' reference voices (data/voices, step 7). */
+  voices?: VoiceStore | undefined;
   /** Hosts allowed in the Host/Origin headers, e.g. ["127.0.0.1:3210"]. */
   allowedHosts: string[];
   /** Fixed name, or a function returning the current one (live settings). */
@@ -98,9 +101,14 @@ const ImageParams = z.object({ id: z.string().uuid() });
 const RetakeParams = z.object({ id: z.string().uuid(), imageId: z.string().uuid() });
 
 const TtsBody = z.object({
-  text: z.string().trim().min(1).max(MAX_TTS_CHARS),
-  /** Speak with this character's own voice (if she has one and it is installed). */
-  characterId: CharacterId.optional(),
+  /** Longer than what is spoken: prepareSpeech cuts it at a sentence end (her replies can be long). */
+  text: z
+    .string()
+    .trim()
+    .min(1)
+    .max(MAX_SPEECH_CHARS * 4),
+  /** Whose voice: every character has her own (made automatically if needed). */
+  characterId: CharacterId,
 });
 
 /** Audio uploads: 16 kHz mono float32 = 64 KB/s, so 4 MB ≈ 60 s. */
@@ -152,6 +160,7 @@ function httpError(err: unknown): { status: number; message: string } {
   if (err instanceof VoiceUnavailableError) return { status: 503, message: err.message };
   if (err instanceof ImageUnavailableError) return { status: 503, message: err.message };
   if (err instanceof ImageRefusedError) return { status: 422, message: err.message };
+  if (err instanceof VoiceRefusedError) return { status: 422, message: err.message };
   if (err instanceof ComfyError) return { status: 502, message: err.message };
   if (err instanceof LlmHttpError)
     return { status: 502, message: 'The LLM backend rejected the request (is the model pulled?)' };
@@ -255,7 +264,6 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       settings: deps.settings,
       llm: deps.llm,
       images: deps.images,
-      voiceModelsDir: deps.voiceModelsDir ?? './models',
     });
   }
 
@@ -278,6 +286,8 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       faces: deps.faces,
       backgrounds: deps.backgrounds,
       images: deps.images,
+      voices: deps.voices,
+      tts: deps.voice?.tts,
     });
   }
 
@@ -351,18 +361,9 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     if (!deps.images) throw new ImageUnavailableError('Image generation is disabled');
 
     // The response closing before we answered = the user cancelled.
-    const controller = new AbortController();
-    const onClose = () => {
-      if (!reply.raw.writableEnded) controller.abort(new Error('client disconnected'));
-    };
-    reply.raw.on('close', onClose);
-    try {
-      const message = await deps.chat.sendPhoto(id, photoRequest, controller.signal);
-      const { id: messageId, role, content, imageId, createdAt } = message;
-      return { message: { id: messageId, role, content, imageId, createdAt } };
-    } finally {
-      reply.raw.off('close', onClose);
-    }
+    const message = await withClientAbort(reply, (signal) => deps.chat.sendPhoto(id, photoRequest, signal));
+    const { id: messageId, role, content, imageId, createdAt } = message;
+    return { message: { id: messageId, role, content, imageId, createdAt } };
   });
 
   /**
@@ -373,18 +374,9 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   app.post('/api/sessions/:id/images/:imageId/retake', async (request, reply) => {
     const { id, imageId } = RetakeParams.parse(request.params);
     if (!deps.images) throw new ImageUnavailableError('Image generation is disabled');
-    const controller = new AbortController();
-    const onClose = () => {
-      if (!reply.raw.writableEnded) controller.abort(new Error('client disconnected'));
-    };
-    reply.raw.on('close', onClose);
-    try {
-      const message = await deps.chat.retakePhoto(id, imageId, controller.signal);
-      const { id: messageId, role, content, createdAt } = message;
-      return { message: { id: messageId, role, content, imageId: message.imageId, createdAt } };
-    } finally {
-      reply.raw.off('close', onClose);
-    }
+    const message = await withClientAbort(reply, (signal) => deps.chat.retakePhoto(id, imageId, signal));
+    const { id: messageId, role, content, createdAt } = message;
+    return { message: { id: messageId, role, content, imageId: message.imageId, createdAt } };
   });
 
   /** Serve a generated image. The path comes from the DB, never from the URL. */
@@ -404,19 +396,10 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
 
   const voiceDisabled = { available: false, model: '', reason: 'disabled (VOICE_ENABLED=false)' };
 
-  app.get(
-    '/api/voice',
-    async (): Promise<VoiceStatus & { voices: Array<{ id: string; description: string; installed: boolean }> }> => ({
-      stt: deps.voice ? deps.voice.stt.status() : voiceDisabled,
-      tts: deps.voice ? deps.voice.tts.status() : voiceDisabled,
-      // For the character editor's "her voice" list.
-      voices: TTS_VOICE_IDS.map((id) => ({
-        id,
-        description: TTS_VOICES[id].description,
-        installed: Boolean(deps.voice?.tts.isInstalled?.(id)),
-      })),
-    }),
-  );
+  app.get('/api/voice', async (): Promise<VoiceStatus> => ({
+    stt: deps.voice ? deps.voice.stt.status() : voiceDisabled,
+    tts: deps.voice ? await deps.voice.tts.status() : voiceDisabled,
+  }));
 
   /** Body: little-endian float32 mono PCM at 16 kHz. Returns { text }. */
   app.post('/api/stt', async (request) => {
@@ -433,20 +416,18 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     return { text: cleanTranscript(text) };
   });
 
-  /** Body: { text }. Returns a WAV file (or 204 if nothing is speakable). */
+  /**
+   * Body: { text, characterId }. Returns her voice saying it, as FLAC (or 204
+   * if nothing is speakable). Long request: the GPU is swapped to Qwen3-TTS
+   * (~10–30 s), or instant when this text was already spoken (cache). Closing
+   * the page cancels it.
+   */
   app.post('/api/tts', async (request, reply) => {
     if (!deps.voice) throw new VoiceUnavailableError('Voice is disabled');
     const body = TtsBody.parse(request.body);
-    const speech = cleanForSpeech(body.text);
-    if (!speech) return reply.code(204).send();
-    // Her own voice when set and downloaded; otherwise the default one.
-    const own = body.characterId ? deps.characters.get(body.characterId)?.voice : undefined;
-    const voice = own && deps.voice.tts.isInstalled?.(own) ? own : undefined;
-    const audio = await deps.voice.tts.synthesize(speech, voice);
-    return reply
-      .header('Content-Type', 'audio/wav')
-      .header('Cache-Control', 'no-store')
-      .send(encodeWav16(audio.samples, audio.sampleRate));
+    const flac = await withClientAbort(reply, (signal) => deps.voice!.tts.speak(body.characterId, body.text, signal));
+    if (!flac) return reply.code(204).send();
+    return reply.header('Content-Type', 'audio/flac').header('Cache-Control', 'no-store').send(flac);
   });
 
   /** Shared SSE handler for "send message", "regenerate" and "she writes first". */

@@ -308,10 +308,32 @@
         </div>
 
         <div class="editor-side">
-          <label class="field">
-            <span>Her voice</span>
-            <select name="voice" id="editor-voice"></select>
-          </label>
+          <section class="voice" aria-labelledby="voice-title">
+            <h3 id="voice-title">Her voice</h3>
+            <label class="field">
+              <span class="small muted">What she sounds like</span>
+              <textarea
+                name="voiceDescription"
+                id="voice-description"
+                rows="3"
+                maxlength="500"
+                aria-describedby="voice-hint"
+                placeholder="Woman in her late twenties, warm and slightly husky voice, calm, a little playful, speaks softly"
+              ></textarea>
+              <span id="voice-hint" class="hint"
+                >Age, pitch, texture, mood, pace. Without one, she gets a natural default voice the first time she
+                speaks.</span
+              >
+            </label>
+            <div id="voice-current" class="voice-current"><span class="muted small">No voice yet</span></div>
+            <div class="face-actions">
+              <button id="voice-generate" class="secondary" type="button">Create her voice</button>
+              <button id="voice-remove" class="ghost danger" type="button" hidden>Remove</button>
+            </div>
+            <ol id="voice-candidates" class="voice-candidates" hidden></ol>
+            <p id="voice-status" class="small muted" role="status" aria-live="polite"></p>
+          </section>
+
           <label class="field">
             <span>Appearance in pictures</span>
             <textarea

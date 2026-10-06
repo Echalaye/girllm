@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { comfyCommand, comfyRoot, isLocalUrl, isStale, waitUntilUp } from '../scripts/launcherLib.js';
+import { COMFY_ENV, comfyCommand, comfyRoot, isLocalUrl, isStale, waitUntilUp } from '../scripts/launcherLib.js';
 
 const tmp = () => mkdtempSync(join(tmpdir(), 'girllm-launch-'));
 
@@ -32,6 +32,8 @@ describe('comfyCommand', () => {
       expect.arrayContaining(['--windows-standalone-build', '--disable-auto-launch', '--listen', '127.0.0.1']),
     );
     expect(cmd.cwd).toBe(dir);
+    // Its output goes to a log file: UTF-8, or the first emoji of a custom node aborts startup.
+    expect(cmd.env).toEqual({ PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' });
   });
 
   it('detects a manual install and rejects other folders', () => {
@@ -42,6 +44,7 @@ describe('comfyCommand', () => {
       args: ['main.py', '--listen', '127.0.0.1', '--port', '9000', '--disable-auto-launch'],
     });
     expect(comfyCommand(dir, 9000, 'win32')!.command).toBe('python');
+    expect(comfyCommand(dir, 9000, 'win32')!.env).toEqual(COMFY_ENV);
     expect(comfyCommand(tmp(), 8188)).toBeUndefined();
   });
 });

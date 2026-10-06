@@ -4,10 +4,10 @@ A **local, private AI companion / roleplay chat** that runs entirely on your own
 Nothing leaves your machine: the model runs on your GPU through [Ollama](https://ollama.com)
 (or any OpenAI-compatible server), and the app only listens on `127.0.0.1`.
 
-> **Status: step 6 done.** Streaming chat with characters, long-term memory, voice (push-to-talk or a hands-free
-> call), photos she sends with a consistent face and detailed eyes, realistic or anime characters, her picture behind
-> the chat, messages she writes first, lorebooks, an image test bench, a character editor and settings you change
-> from the app, all offline.
+> **Status: step 7 done.** Streaming chat with characters, long-term memory, her own designed voice (on demand,
+> push-to-talk or a hands-free call), photos she sends with a consistent face and detailed eyes, realistic or anime
+> characters, her picture behind the chat, messages she writes first, lorebooks, an image test bench, a character
+> editor and settings you change from the app, all offline.
 > See the [roadmap](#roadmap).
 
 [![CI](https://github.com/Echalaye/girllm/actions/workflows/ci.yml/badge.svg)](https://github.com/Echalaye/girllm/actions/workflows/ci.yml)
@@ -16,6 +16,27 @@ Nothing leaves your machine: the model runs on your GPU through [Ollama](https:/
 ---
 
 ## Features
+
+### Her own voice (step 7)
+
+- **A voice made for her.** In the character editor ("Her voice"), describe how she sounds ("woman in her late
+  twenties, warm and slightly husky, calm, a little playful") and click **Create her voice**: Qwen3-TTS 1.7B makes
+  a short sample. Listen, keep it, or create another one (the last 3 stay on screen to compare). That sample becomes
+  her reference, and **every message she speaks is said with that exact voice** (voice cloning), so she always
+  sounds like the same person. A character without a voice gets one automatically the first time she speaks, from
+  her description or a natural default for her gender.
+- **🔊 on each of her messages**: click to hear it. The voice is made on the GPU like her photos (the chat model is
+  unloaded for a few seconds, then reloads for the next reply), so a message takes a while to prepare the first
+  time (estimated ~10–30 s); replaying it is instant (spoken messages are kept in `data/speech-cache/`, the
+  newest 300). Click again to stop her.
+- **Voice on** and **calls** now speak her whole reply once it is written (no longer sentence by sentence: each GPU
+  swap costs a few seconds). Expect a pause before she answers in a call.
+- **French and 9 other languages** (English, German, Spanish, Italian, Portuguese, Russian, Japanese, Korean,
+  Chinese), following the reply language in the settings.
+- **Adult voices only**: a description asking for a child's voice is refused, every designed voice is described as an
+  adult's, and a card stating an age under 18 gets no voice.
+- Install: `npm run setup:voice` (Whisper + Qwen3-TTS into ComfyUI, ~9 GB, see [Voice](#voice)). The Piper voices of
+  step 3 and their settings are gone; your speech is still transcribed by Whisper on the CPU.
 
 ### Better photos and an image test bench (step 6)
 
@@ -84,15 +105,16 @@ Nothing leaves your machine: the model runs on your GPU through [Ollama](https:/
   in character. Frequency: `PHOTO_FREQUENCY` = `off`, `rare` (default) or `often`. The 📷 button still works.
 - **The same face in every photo.** The reference face chosen in the editor is applied to her photos with
   IP-Adapter Plus Face (`npm run setup:images`, once). Strength: `IMAGE_FACE_WEIGHT` (0.7 by default, 0 = off).
-- **Her own voice.** Each character can have her own voice (character editor); otherwise the one from the settings.
+- **Her own voice.** Each character can have her own voice (character editor). Since step 7 it is designed from a
+  description, see [Her own voice](#her-own-voice-step-7).
 - **Lorebooks.** Background facts (family, job, places, shared memories) with keywords: an entry is added to her
   notes only when the conversation mentions it, so long backstories cost nothing until they matter. Compatible with
   SillyTavern `character_book`.
 
 ### In the app (step 4c)
 
-- **Settings panel** (gear icon, bottom left): your name, reply language, chat model, creativity, her voice and
-  speaking speed, the image model and its parameters. Changes apply to the next message, no restart. `.env` still
+- **Settings panel** (gear icon, bottom left): your name, reply language, chat model, creativity, the language you
+  speak, the image model and its parameters. Changes apply to the next message, no restart. `.env` still
   holds the defaults; "Restore .env values" goes back to them.
 - **Character editor** (pencil icon, or "New character"): name, how she writes (text messages or roleplay), who she
   is, personality, situation, first message, appearance in photos, plus the advanced card fields. "Import a card"
@@ -102,7 +124,7 @@ Nothing leaves your machine: the model runs on your GPU through [Ollama](https:/
   is AI-generated, of yourself, or of an adult who agreed. Uploads are re-written without their metadata (EXIF, GPS,
   text). The face is her avatar, and step 4d keeps it in her photos.
 - **Hands-free call** (phone icon): talk naturally, she hears when you stop, answers out loud, then listens again.
-  Needs both voice engines installed (`npm run setup:voice`).
+  Needs both voice engines installed (`npm run setup:voice`) and ComfyUI running (her voice, step 7).
 - **New interface**: sidebar with characters and chats, her portrait in the header, light and dark themes,
   keyboard- and screen-reader-friendly, usable on a phone-sized window.
 
@@ -130,11 +152,10 @@ Nothing leaves your machine: the model runs on your GPU through [Ollama](https:/
 ### Voice (step 3)
 
 - **Talk instead of typing**: click 🎤, speak, click Stop. Your voice is transcribed locally by Whisper and sent.
-- **Hear her answer** (🔊 Voice on): replies are spoken **sentence by sentence while they're being written**, so she
-  starts talking within a second or two. Stage directions like `*smiles*` are not read aloud.
+- **Hear her answer** (Voice on): stage directions like `*smiles*` are not read aloud. Since step 7 her voice is
+  Qwen3-TTS on the GPU (see [Her own voice](#her-own-voice-step-7)); step 3 used Piper voices on the CPU.
 - Talking (or pressing Stop) interrupts her, like a real conversation.
-- Several French voices (female and male) plus English. Everything runs **on the CPU**, so the GPU stays free for the
-  LLM, and no audio ever leaves your PC.
+- Speech recognition runs **on the CPU**, and no audio ever leaves your PC.
 
 ### Memory (step 2)
 
@@ -195,7 +216,7 @@ ollama pull paraphrase-multilingual     # embedding model for memory search (~0.
 cd C:\Users\etien\Desktop\girllm
 npm install
 copy .env.example .env      # then edit USER_NAME, model, etc.
-npm run setup:voice         # optional: downloads the voice models (~265 MB, checksum-verified)
+npm run setup:voice         # optional: Whisper (~200 MB) + her voice, Qwen3-TTS in ComfyUI (~9 GB; needs COMFYUI_DIR)
 npm run dev                 # hot reload, or: npm run build ; npm start
 ```
 
@@ -312,7 +333,7 @@ Your name comes from `USER_NAME` in `.env`.
 | `extensions.girllm.artStyle`             | `"realistic"` (default) or `"anime"`: which image model and prompt conventions draw her                                                                                                                                      |
 | `extensions.girllm.gender`               | `"female"` (default) or `"male"`: `1girl`/`1boy`, woman/man in pictures                                                                                                                                                      |
 | `extensions.girllm.background`           | `"scene"` (default: her generated scene) or `"latest"` (her latest photo in the chat) behind the chat                                                                                                                        |
-| `extensions.girllm.voice`                | Her own voice id (e.g. `"fr-jessica"`); absent = the voice from the settings                                                                                                                                                 |
+| `extensions.girllm.voiceDescription`     | What her voice sounds like (≤ 500 chars), used to design it (step 7). The voice itself is a clip in `data/voices/`, not in the card. The step 3 field `voice` is dropped when the card is saved                              |
 | `extensions.girllm.appearance`           | Fixed look used for **every photo** (image-prompt tags): `"woman, 26 years old, shoulder-length wavy auburn hair, green eyes, …"`. Without it, the LLM improvises the look from the description, which varies between photos |
 
 All characters must be adults. The default system prompt states it explicitly, and photos are refused for a card
@@ -355,13 +376,11 @@ Mistral Nemo-based models (Mistral AI is French) and Qwen models handle French w
 | `EMBEDDING_BASE_URL`                        | = `LLM_BASE_URL`                                  | Backend serving the embedding model                                                                                                         |
 | `MEMORY_TOP_K`                              | `8`                                               | Max memories injected per reply                                                                                                             |
 | `MEMORY_EXTRACT_EVERY`                      | `4`                                               | Facts are extracted once this many new messages are pending                                                                                 |
-| `VOICE_ENABLED`                             | `true`                                            | Voice buttons only appear for the models that are installed                                                                                 |
-| `MODELS_DIR`                                | `./models`                                        | Where `npm run setup:voice` puts the voice models. Git-ignored                                                                              |
+| `VOICE_ENABLED`                             | `true`                                            | Voice buttons only appear for what is installed and running (her voice needs ComfyUI, `COMFYUI_URL`)                                        |
+| `MODELS_DIR`                                | `./models`                                        | Where `npm run setup:voice` puts the Whisper models (her voice goes into ComfyUI). Git-ignored                                              |
 | `STT_MODEL`                                 | `whisper-base`                                    | `whisper-tiny`, `whisper-base`, `whisper-small` (more accurate, ~3× slower)                                                                 |
 | `STT_LANGUAGE`                              | _(empty = auto)_                                  | The language you speak, e.g. `fr`. Setting it avoids misdetections on short sentences                                                       |
-| `TTS_VOICE`                                 | `fr-siwis`                                        | `fr-siwis`, `fr-jessica` (female), `fr-pierre`, `fr-tom` (male), `en-amy`                                                                   |
-| `TTS_SPEED`                                 | `1`                                               | `0.5`–`2`                                                                                                                                   |
-| `VOICE_THREADS`                             | `4`                                               | CPU threads per voice engine                                                                                                                |
+| `VOICE_THREADS`                             | `4`                                               | CPU threads of speech recognition (`TTS_VOICE` / `TTS_SPEED` of step 3 are ignored since step 7)                                            |
 | `IMAGES_ENABLED`                            | `true`                                            | Shows the 📷 button (it explains why if ComfyUI isn't ready)                                                                                |
 | `COMFYUI_DIR`                               | _(empty)_                                         | ComfyUI install folder, so `start.bat` can start it. Only used by the launcher                                                              |
 | `COMFYUI_URL`                               | `http://127.0.0.1:8188`                           |                                                                                                                                             |
@@ -404,7 +423,7 @@ values". Ports, folders, context size and providers stay in `.env` (they need a 
 | `start.bat`                       | One-click launcher: Ollama + ComfyUI + girllm + browser (Windows)                                                                                                                                                                                                                                          |
 | `npm run launch`                  | Same launcher, any OS (`-- --no-browser` to skip the browser)                                                                                                                                                                                                                                              |
 | `npm run dev`                     | Start with hot reload (tsx)                                                                                                                                                                                                                                                                                |
-| `npm run setup:voice`             | Download the voice models chosen in `.env`. `-- --list` shows all of them, `-- fr-tom whisper-small` installs specific ones                                                                                                                                                                                |
+| `npm run setup:voice`             | Whisper (`STT_MODEL`) into `MODELS_DIR`, and her voice into `COMFYUI_DIR`: Qwen3-TTS nodes at a pinned commit, models pinned by commit and SHA-256, missing Python packages at exact versions. `-- --list`, `-- whisper-small`, `-- --stt-only`                                                            |
 | `npm run setup:images`            | Install IP-Adapter (consistent face) into `COMFYUI_DIR`: nodes at a pinned commit, models checked by SHA-256 (needs git), and the face detector. `-- --anime` adds Animagine XL 4.0, `-- --juggernaut` Juggernaut XI, `-- --flux2-klein` FLUX.2 [klein] 4B (bench), `-- --flux2-klein-base` its base model |
 | `npm run compare:images`          | Image test bench: the same test shots through several models, contact sheet in `data/compare-images/` (ComfyUI must be running). See [Comparing image models](#comparing-image-models)                                                                                                                     |
 | `npm run build` / `npm start`     | Compile to `dist/` and run                                                                                                                                                                                                                                                                                 |
@@ -428,7 +447,14 @@ for every push and pull request. No GPU or model is needed: the LLM, ComfyUI and
 - **Origin check**: cross-site requests from other websites are rejected (`403`).
 - Strict **CSP** (`default-src 'self'`, no inline scripts). Model output is rendered with `textContent`, never as HTML.
 - Inputs validated with zod. Body limit 64 KB for JSON, messages ≤ 8000 characters, audio ≤ 4 MB, card files
-  ≤ 20 MB, face images ≤ 10 MB.
+  ≤ 20 MB, face images ≤ 10 MB, voice descriptions ≤ 500 characters.
+- **Her voice is always an adult's** (step 7): voice descriptions go through the same minor and young-look checks
+  as photos plus child-voice words (EN/FR), designed voices are always described as an adult's, and a card stating
+  an age under 18 gets no voice (`422`).
+- **Qwen3-TTS install**: the ComfyUI nodes are pinned to a reviewed commit (its `LoadSpeaker` node, which unpickles
+  files, is never used); model URLs are pinned to a Hugging Face commit, the weights also to a SHA-256; an empty
+  `Qwen3-TTS-Tokenizer-12Hz` folder stops the nodes from downloading anything unpinned; only missing Python packages
+  are installed, at exact versions (never the pack's `requirements.txt`).
 - **Uploaded faces** need an explicit consent confirmation (the API refuses an upload without it: `428`), must be a
   real PNG or JPEG (checked from the bytes, not the file name) between 64 and 4096 px, and are re-written keeping
   only the image data: EXIF (GPS, camera), text and comments are dropped. Files are named after the character id,
@@ -461,26 +487,44 @@ for every push and pull request. No GPU or model is needed: the LLM, ComfyUI and
 🎤 mic ─► browser records (webm/opus) ─► decodes + resamples to 16 kHz mono ─► POST /api/stt
         ─► Whisper (sherpa-onnx, CPU) ─► text ─► sent as a normal message
 
-reply tokens ─► SentenceSplitter (in the browser) ─► each complete sentence ─► POST /api/tts
-        ─► *actions* / emojis removed ─► Piper voice (sherpa-onnx, CPU) ─► WAV ─► played in order
+🔊 / Voice on / call ─► her whole message ─► POST /api/tts {text, characterId}
+        ─► *actions* / emojis removed, cut at a sentence end after 1500 characters ─► already spoken? cached FLAC
+        ─► her voice clip (data/voices/<id>.flac; made from her description the first time)
+        ─► EXCLUSIVE GPU PHASE: unload the chat model ─► ComfyUI: Qwen3-TTS voice clone (her clip + its words)
+           ─► FLAC ─► ComfyUI /free ─► cached in data/speech-cache ─► played
+
+editor "Create her voice" ─► description (adult checks) ─► same GPU phase: Qwen3-TTS VoiceDesign says a sample
+        sentence in the chat language ─► candidate ─► "Keep this voice" ─► her clip
 ```
 
-- **Setup**: `npm run setup:voice` downloads only from the official sherpa-onnx GitHub releases, and checks each
-  archive against a pinned SHA-256 before extracting it.
-- **Speed** (6-core CPU): transcription takes well under the length of what you said with `whisper-base`; a sentence
-  of speech is synthesized in a fraction of a second.
+- **Setup**: `npm run setup:voice` installs Whisper from the official sherpa-onnx GitHub releases (each archive
+  checked against a pinned SHA-256 before extraction) and, when `COMFYUI_DIR` is set, Qwen3-TTS into ComfyUI:
+  the [ComfyUI-Qwen-TTS](https://github.com/flybirdxx/ComfyUI-Qwen-TTS) nodes (Apache 2.0) at a pinned commit, the
+  1.7B voice-clone and voice-design models (~9 GB, Apache 2.0), and the few Python packages ComfyUI lacks
+  (`librosa`, `soundfile`, `einops`, `sox`, `onnxruntime`, `accelerate`, at exact versions; only the missing ones).
+  Restart ComfyUI afterwards. A manual (non-portable) ComfyUI gets the pip command printed instead.
+- **Speed** (estimate for an RTX 5060 8 GB, to be confirmed): the model loads in a few seconds, then generates at
+  roughly real time, so a 10 s message should take ~10–25 s the first time, and nothing when replayed. Your chat
+  model reloads by itself for the next reply.
+  Transcription stays on the CPU and takes well under the length of what you said with `whisper-base`.
+- **ComfyUI stops at startup with `UnicodeEncodeError … '\u2705'`**: its output was written in the Windows code
+  page and the Qwen3-TTS nodes print an emoji. `start.bat` runs ComfyUI with UTF-8 output since step 7; if you start
+  ComfyUI yourself into a file, set `PYTHONIOENCODING=utf-8` first. The "SoX could not be found!" warning at startup
+  is harmless (that part of the nodes is not used).
+- **Her voice is unavailable** (no 🔊): ComfyUI isn't running yet (the page checks again every 30 s), or the nodes
+  aren't installed (`npm run setup:voice`, then restart ComfyUI). The reason is in the girllm log at startup.
 - **Accuracy**: `whisper-base` is good for everyday French but can stumble on names. Try `STT_MODEL=whisper-small`
   if it misunderstands you too often (then run `npm run setup:voice` again).
 - **Microphone access** requires a "secure context": `http://127.0.0.1:3210` and `http://localhost:3210` work. A LAN
   or Tailscale IP over plain HTTP doesn't: the mic button is greyed out there.
-- Speech recognition and synthesis each handle one request at a time; extra requests wait their turn.
+- Speech recognition handles one request at a time; voice generations wait for the GPU like photos, one at a time.
 
 ### Hands-free call
 
 ```
 mic ─► AudioWorklet (raw samples) ─► downsampled to 16 kHz ─► voice activity detection (vad.js)
     ─► you stop talking for ~0.9 s ─► the utterance goes to /api/stt ─► sent as a message
-    ─► her reply is spoken sentence by sentence ─► when she's done, listening resumes
+    ─► her whole reply is spoken with her voice (GPU, a few seconds) ─► when she's done, listening resumes
 ```
 
 - The detector compares each 30 ms frame with an **adaptive estimate of the background noise**, with a higher
@@ -639,7 +683,7 @@ each reply ─► prompt = character card
 
 1. ✅ **Streaming chat + character persona**
 2. ✅ **Memory**: SQLite persistence, running summary, long-term memories with semantic search, mood
-3. ✅ **Voice**: Whisper speech-to-text and Piper French voices, on the CPU via sherpa-onnx
+3. ✅ **Voice**: Whisper speech-to-text and Piper French voices, on the CPU via sherpa-onnx (Piper replaced in step 7)
 4. ✅ **Photos on demand**: ComfyUI SDXL, with GPU handover between the LLM and the image model
    - 4a ✅ Lint, formatting, CI, one-click launcher
    - 4b ✅ More human text (styles, time awareness, anti-repetition, model comparison) and better photos
@@ -653,8 +697,11 @@ each reply ─► prompt = character card
    - 6b ✅ FLUX.2 [klein] 4B: compared on the test bench, then the realistic photo model of the app, with a stricter
      safety check and a "retake" button on photos
    - 6c ✅ FLUX.2 face pass: her small face redrawn from her profile picture in wide and full-body photos
+7. ✅ **Her own voice**: Qwen3-TTS 1.7B in ComfyUI, a voice designed from a description in the editor and cloned for
+   every message, 🔊 on each message, used by "Voice on" and calls
 
-Ideas for later: a LoRA for an even more consistent face (especially for anime characters), voice cloning (option B: a Python XTTS service),
-interrupting her by talking during a call, and phone access through Tailscale.
+Ideas for later: a LoRA for an even more consistent face (especially for anime characters), emotions in her voice
+(Qwen3-TTS takes an instruction like "whispering" or "laughing"), interrupting her by talking during a call, and
+phone access through Tailscale.
 
 Architecture details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).

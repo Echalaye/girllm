@@ -7,16 +7,12 @@ import type { ImageService } from '../../images/imageService.js';
 import type { LlmProvider } from '../../llm/types.js';
 import { SETTING_KEYS, type SettingKey } from '../../settings/settingsSchema.js';
 import type { SettingsService } from '../../settings/settingsService.js';
-import { TTS_VOICES, type TtsVoiceId } from '../../voice/catalog.js';
 import { MODEL_PRESETS } from '../../images/presets.js';
-import { isTtsVoiceInstalled } from '../../voice/sherpaVoice.js';
 
 export interface SettingsRoutesDeps {
   settings: SettingsService;
   llm: LlmProvider;
   images?: ImageService | undefined;
-  /** MODELS_DIR, to tell which voices are downloaded. */
-  voiceModelsDir: string;
 }
 
 const ResetBody = z.object({ keys: z.array(z.enum(SETTING_KEYS as [SettingKey, ...SettingKey[]])).optional() });
@@ -38,11 +34,6 @@ export function registerSettingsRoutes(app: FastifyInstance, deps: SettingsRoute
         checkpoints: checkpoints ?? [],
         // Recommended sampler settings of known image models (filled in when one is picked).
         presets: MODEL_PRESETS.map(({ match, ...rest }) => ({ ...rest, pattern: match.source })),
-        voices: (Object.keys(TTS_VOICES) as TtsVoiceId[]).map((id) => ({
-          id,
-          description: TTS_VOICES[id].description,
-          installed: isTtsVoiceInstalled(deps.voiceModelsDir, id),
-        })),
       },
     };
   });

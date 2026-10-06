@@ -55,15 +55,6 @@ const GROUPS = [
     title: 'Voice',
     fields: [
       {
-        key: 'ttsVoice',
-        label: 'Her voice',
-        type: 'select',
-        options: (o) =>
-          o.voices.map((v) => [v.id, v.installed ? v.description : `${v.description} (not installed)`, !v.installed]),
-        hint: 'Install more voices with: npm run setup:voice',
-      },
-      { key: 'ttsSpeed', label: 'Speaking speed', type: 'range', min: 0.5, max: 2, step: 0.05 },
-      {
         key: 'sttLanguage',
         label: 'Language you speak',
         type: 'select',

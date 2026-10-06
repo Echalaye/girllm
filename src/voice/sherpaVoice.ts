@@ -1,29 +1,23 @@
 /**
- * Local speech-to-text (Whisper) and text-to-speech (Piper/VITS voices)
- * using sherpa-onnx: native ONNX Runtime on the CPU, prebuilt for Windows,
- * no Python. Running on the CPU keeps the 8 GB of VRAM for the LLM.
+ * Local speech-to-text (Whisper) using sherpa-onnx: native ONNX Runtime on
+ * the CPU, prebuilt for Windows, no Python. Running on the CPU keeps the
+ * 8 GB of VRAM for the LLM. (Her voice is Qwen3-TTS on the GPU since step 7:
+ * see speechService.ts; the Piper voices of steps 3–6 are gone.)
  *
- * Models are loaded lazily on first use (~1 s each) and kept in memory.
- * Each engine processes one request at a time (Mutex): the native handles
- * are not documented as thread-safe, and parallel jobs would only fight
- * for the same CPU cores anyway.
+ * The model is loaded lazily on first use (~1 s) and kept in memory. One
+ * request at a time (Mutex): the native handles are not documented as
+ * thread-safe, and parallel jobs would only fight for the same CPU cores.
  */
 import { existsSync } from 'node:fs';
 // Type-only imports: erased at compile time, so the native addon is still
 // loaded lazily by loadSherpa() below.
 import type sherpaModule from 'sherpa-onnx-node';
-import type { OfflineRecognizer, OfflineTts } from 'sherpa-onnx-node';
+import type { OfflineRecognizer } from 'sherpa-onnx-node';
 import { join, resolve as resolvePath } from 'node:path';
 import { resolve, type Live } from '../util/resolve.js';
 import { Mutex } from '../util/mutex.js';
-import { STT_MODELS, TTS_VOICES, type SttModelId, type TtsVoiceId } from './catalog.js';
-import {
-  VoiceUnavailableError,
-  type AudioClip,
-  type SpeechToText,
-  type TextToSpeech,
-  type VoiceComponentStatus,
-} from './types.js';
+import { STT_MODELS, type SttModelId } from './catalog.js';
+import { VoiceUnavailableError, type AudioClip, type SpeechToText, type VoiceComponentStatus } from './types.js';
 
 type Sherpa = typeof sherpaModule;
 
@@ -114,98 +108,5 @@ export class SherpaSpeechToText implements SpeechToText {
     // A failed load must not be cached forever: allow a retry.
     this.recognizer.catch(() => (this.recognizer = undefined));
     return this.recognizer;
-  }
-}
-
-// ----------------------------------------------------------------- TTS
-
-export interface SherpaTtsOptions {
-  modelsDir: string;
-  voice: TtsVoiceId;
-  /** 1 = normal; >1 faster. */
-  speed: number;
-  numThreads: number;
-}
-
-/** Model files of a Piper voice inside MODELS_DIR. */
-function ttsFiles(modelsDir: string, voice: TtsVoiceId) {
-  const v = TTS_VOICES[voice];
-  const dir = join(resolvePath(modelsDir), v.dir);
-  return { model: join(dir, `${v.file}.onnx`), tokens: join(dir, 'tokens.txt'), dataDir: join(dir, 'espeak-ng-data') };
-}
-
-/** Is this voice downloaded? (used to list choices in the settings) */
-export function isTtsVoiceInstalled(modelsDir: string, voice: TtsVoiceId): boolean {
-  return firstMissing(Object.values(ttsFiles(modelsDir, voice))) === undefined;
-}
-
-export class SherpaTextToSpeech implements TextToSpeech {
-  private readonly mutex = new Mutex();
-  /**
-   * Loaded engines by voice. Two are kept (≈ 60 MB each) so switching
-   * between two characters doesn't reload a model at every sentence.
-   */
-  private readonly engines = new Map<TtsVoiceId, Promise<OfflineTts>>();
-  private static readonly MAX_ENGINES = 2;
-
-  /** @param options fixed, or a function returning the current ones (live settings). */
-  constructor(private readonly options: Live<SherpaTtsOptions>) {}
-
-  private get opts(): SherpaTtsOptions {
-    return resolve(this.options);
-  }
-
-  status(): VoiceComponentStatus {
-    const { voice, modelsDir } = this.opts;
-    return isTtsVoiceInstalled(modelsDir, voice)
-      ? { available: true, model: voice }
-      : { available: false, model: voice, reason: 'voice not downloaded (run: npm run setup:voice)' };
-  }
-
-  /** Is this voice downloaded? (per-character voices fall back to the default one otherwise) */
-  isInstalled(voice: TtsVoiceId): boolean {
-    return isTtsVoiceInstalled(this.opts.modelsDir, voice);
-  }
-
-  /** @param voice a character's own voice; default = the one from the settings */
-  synthesize(text: string, voice?: TtsVoiceId): Promise<AudioClip> {
-    return this.mutex.run(async () => {
-      const o = this.opts; // read once: voice and speed of THIS request
-      const id = voice ?? o.voice;
-      const tts = await this.load(id, o);
-      const audio = await tts.generateAsync({ text, sid: TTS_VOICES[id].speakerId, speed: o.speed });
-      return { samples: audio.samples, sampleRate: audio.sampleRate };
-    });
-  }
-
-  private load(voice: TtsVoiceId, o: SherpaTtsOptions): Promise<OfflineTts> {
-    const cached = this.engines.get(voice);
-    if (cached) {
-      // Most recently used goes last (Map keeps insertion order).
-      this.engines.delete(voice);
-      this.engines.set(voice, cached);
-      return cached;
-    }
-    if (!isTtsVoiceInstalled(o.modelsDir, voice)) {
-      throw new VoiceUnavailableError('Text-to-speech unavailable: voice not downloaded (run: npm run setup:voice)');
-    }
-    const files = ttsFiles(o.modelsDir, voice);
-    const engine = loadSherpa().then((sherpa) =>
-      sherpa.OfflineTts.createAsync({
-        model: {
-          vits: { model: files.model, tokens: files.tokens, dataDir: files.dataDir },
-          numThreads: o.numThreads,
-          provider: 'cpu',
-        },
-        maxNumSentences: 1,
-      }),
-    );
-    engine.catch(() => this.engines.delete(voice));
-    this.engines.set(voice, engine);
-    // Evict the least recently used engine (the native object is freed by GC).
-    while (this.engines.size > SherpaTextToSpeech.MAX_ENGINES) {
-      this.engines.delete(this.engines.keys().next().value!);
-    }
-    return engine;
   }
 }

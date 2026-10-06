@@ -19,10 +19,10 @@ describe('SettingsService', () => {
 
   it('validates, persists and reloads overrides', () => {
     const { db, settings } = make();
-    settings.update({ temperature: 0.85, ttsVoice: 'fr-tom', replyLanguage: '' });
-    expect(settings.overriddenKeys().sort()).toEqual(['replyLanguage', 'temperature', 'ttsVoice']);
+    settings.update({ temperature: 0.85, sttLanguage: 'fr', replyLanguage: '' });
+    expect(settings.overriddenKeys().sort()).toEqual(['replyLanguage', 'sttLanguage', 'temperature']);
     const reloaded = new SettingsService(db, defaults, 4096);
-    expect(reloaded.get()).toMatchObject({ temperature: 0.85, ttsVoice: 'fr-tom', replyLanguage: '' });
+    expect(reloaded.get()).toMatchObject({ temperature: 0.85, sttLanguage: 'fr', replyLanguage: '' });
   });
 
   it('rejects unknown keys, bad values and too-long replies, leaving settings untouched', () => {
@@ -30,7 +30,9 @@ describe('SettingsService', () => {
     expect(() => settings.update({ temprature: 1 })).toThrow(SettingsValidationError);
     expect(() => settings.update({ temperature: 5 })).toThrow(/temperature/);
     expect(() => settings.update({ llmModel: 'x; rm -rf /' })).toThrow(/llmModel/);
-    expect(() => settings.update({ ttsVoice: 'siri' })).toThrow(/ttsVoice/);
+    expect(() => settings.update({ sttLanguage: 'french' })).toThrow(/sttLanguage/);
+    // Removed in step 7 (Piper voices): no longer a setting.
+    expect(() => settings.update({ ttsVoice: 'fr-tom' })).toThrow(SettingsValidationError);
     expect(() => settings.update({ maxReplyTokens: 2000 })).toThrow(/less than 1024/);
     expect(settings.get().temperature).toBe(0.7);
   });

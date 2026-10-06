@@ -16,12 +16,14 @@ const fakeVoice = {
     transcribe: async (a: { samples: Float32Array }) => `heard ${a.samples.length} samples`,
   },
   tts: {
-    status: () => ({ available: true, model: 'fake-tts' }),
-    lastText: '',
-    async synthesize(text: string) {
-      this.lastText = text;
-      return { samples: new Float32Array(100), sampleRate: 22050 };
+    status: async () => ({ available: true, model: 'fake-tts' }),
+    last: { characterId: '', text: '' },
+    /** Echo: a FLAC header, or nothing when the text is only an *action*. */
+    async speak(characterId: string, text: string) {
+      this.last = { characterId, text };
+      return text.startsWith('*') ? undefined : Buffer.from('fLaC fake');
     },
+    designCandidate: async () => 'candidate',
   },
 };
 
@@ -192,7 +194,10 @@ describe('HTTP API - voice', () => {
     await makeApp(false);
     const status = (await app.inject({ method: 'GET', url: '/api/voice', headers: { host: HOST } })).json();
     expect(status.stt.available).toBe(false);
-    expect((await app.inject({ method: 'POST', url: '/api/tts', ...json({ text: 'Bonjour' }) })).statusCode).toBe(503);
+    expect(
+      (await app.inject({ method: 'POST', url: '/api/tts', ...json({ text: 'Bonjour', characterId: 'aria' }) }))
+        .statusCode,
+    ).toBe(503);
   });
 
   it('transcribes float32 audio and validates the payload', async () => {
@@ -205,17 +210,19 @@ describe('HTTP API - voice', () => {
     expect((await app.inject({ method: 'POST', url: '/api/stt', ...audio(5 * 1024 * 1024) })).statusCode).toBe(413);
   });
 
-  it('synthesizes cleaned text as WAV, 204 when nothing is speakable', async () => {
+  it("speaks with the character's voice as FLAC, 204 when nothing is speakable", async () => {
     await makeApp(true);
-    const res = await app.inject({ method: 'POST', url: '/api/tts', ...json({ text: '*sourit* Coucou 😊' }) });
+    const tts = (body: unknown) => app.inject({ method: 'POST', url: '/api/tts', ...json(body) });
+    const res = await tts({ text: 'Coucou 😊', characterId: 'aria' });
     expect(res.statusCode).toBe(200);
-    expect(res.headers['content-type']).toBe('audio/wav');
-    expect(res.rawPayload.toString('ascii', 0, 4)).toBe('RIFF');
-    expect(fakeVoice.tts.lastText).toBe('Coucou');
-    expect((await app.inject({ method: 'POST', url: '/api/tts', ...json({ text: '*sourit*' }) })).statusCode).toBe(204);
-    expect(
-      (await app.inject({ method: 'POST', url: '/api/tts', ...json({ text: 'a'.repeat(1001) }) })).statusCode,
-    ).toBe(400);
+    expect(res.headers['content-type']).toBe('audio/flac');
+    expect(res.rawPayload.toString('ascii', 0, 4)).toBe('fLaC');
+    expect(fakeVoice.tts.last).toEqual({ characterId: 'aria', text: 'Coucou 😊' });
+    expect((await tts({ text: '*sourit*', characterId: 'aria' })).statusCode).toBe(204);
+    // Whose voice is required; ids and sizes are validated.
+    expect((await tts({ text: 'Coucou' })).statusCode).toBe(400);
+    expect((await tts({ text: 'Coucou', characterId: '../etc' })).statusCode).toBe(400);
+    expect((await tts({ text: 'a'.repeat(6001), characterId: 'aria' })).statusCode).toBe(400);
   });
 
   it('allows blob: media in the CSP for audio playback', async () => {
@@ -385,12 +392,13 @@ describe('HTTP API - settings', () => {
     return settings;
   }
 
-  it('returns values, defaults and options (models from the backend, voices with install state)', async () => {
+  it('returns values, defaults and options (models from the backend, model presets)', async () => {
     await makeSettingsApp();
     const res = (await app.inject({ method: 'GET', url: '/api/settings', headers: { host: HOST } })).json();
     expect(res.values.userName).toBe('Etienne');
     expect(res.options.models).toEqual(['fake']);
-    expect(res.options.voices.find((v: { id: string }) => v.id === 'fr-siwis')).toMatchObject({ installed: false }); // Recommended settings per known model (step 6), regex sent as a string.
+    expect(res.values.ttsVoice).toBeUndefined(); // Piper voices are gone (step 7)
+    // Recommended settings per known model (step 6), regex sent as a string.
     expect(res.options.presets).toContainEqual(
       expect.objectContaining({ name: 'Juggernaut XL', pattern: 'juggernaut' }),
     );

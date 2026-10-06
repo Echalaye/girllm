@@ -1,12 +1,14 @@
 /**
  * Character lifecycle beyond the card file: deleting a character also
  * deletes its chats (and their photos), its long-term memories, its
- * reference face and its chat background, so nothing orphaned stays on disk.
+ * reference face, its chat background and its voice, so nothing orphaned
+ * stays on disk.
  */
 import { SessionBusyError, type ChatService } from '../chat/chatService.js';
 import type { SessionStore } from '../chat/sessionStore.js';
 import type { MemoryStore } from '../memory/memoryStore.js';
 import type { CharacterRepository } from './characterRepository.js';
+import type { VoiceStore } from '../voice/voiceStore.js';
 import type { FaceStore } from './faceStore.js';
 
 export class CharacterService {
@@ -18,6 +20,8 @@ export class CharacterService {
     private readonly faces: FaceStore,
     /** Chat backgrounds (optional). */
     private readonly backgrounds?: FaceStore,
+    /** Reference voices (optional). */
+    private readonly voices?: VoiceStore,
   ) {}
 
   /**
@@ -35,6 +39,7 @@ export class CharacterService {
     const memories = this.memories.deleteByCharacter(characterId);
     await this.faces.remove(characterId);
     await this.backgrounds?.remove(characterId);
+    await this.voices?.remove(characterId);
     await this.repo.remove(characterId);
     return { chats: sessionIds.length, memories };
   }

@@ -20,7 +20,7 @@ import {
   readAppearance,
   readPictureFields,
   readStyle,
-  readVoice,
+  readVoiceDescription,
   toInput,
   type CardFields,
   type Character,
@@ -154,7 +154,7 @@ export class CharacterRepository {
       tags: card.tags.slice(0, 20).map((t) => t.slice(0, 40)).filter(Boolean),
       style: readStyle(card.extensions),
       appearance: readAppearance(card.extensions),
-      voice: readVoice(card.extensions) ?? '',
+      voiceDescription: readVoiceDescription(card.extensions),
       artStyle: picture.artStyle,
       gender: picture.gender,
       background: picture.backgroundMode,
@@ -215,8 +215,9 @@ export class CharacterRepository {
     girllm.style = input.style;
     if (input.appearance) girllm.appearance = input.appearance;
     else delete girllm.appearance;
-    if (input.voice) girllm.voice = input.voice;
-    else delete girllm.voice;
+    if (input.voiceDescription) girllm.voiceDescription = input.voiceDescription;
+    else delete girllm.voiceDescription;
+    delete girllm.voice; // Piper voice id (steps 3–6): replaced by the designed voice
     girllm.artStyle = input.artStyle;
     girllm.gender = input.gender;
     girllm.background = input.background;

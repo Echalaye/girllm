@@ -8,7 +8,7 @@
 import { join } from 'node:path';
 import { ANIME_CHECKPOINT_FILE } from './images/artStyle.js';
 import { z } from 'zod';
-import { STT_MODEL_IDS, TTS_VOICE_IDS, type SttModelId, type TtsVoiceId } from './voice/catalog.js';
+import { STT_MODEL_IDS, type SttModelId } from './voice/catalog.js';
 
 /** Accepts "" as "not set" so empty lines in .env don't break validation. */
 const optionalString = z
@@ -88,8 +88,6 @@ const ConfigSchema = z
       .trim()
       .regex(/^([a-z]{2})?$/, 'two-letter code like fr, or empty')
       .default(''),
-    TTS_VOICE: z.enum(TTS_VOICE_IDS).default('fr-siwis'),
-    TTS_SPEED: z.coerce.number().min(0.5).max(2).default(1),
     VOICE_THREADS: z.coerce.number().int().min(1).max(16).default(4),
 
     IMAGES_ENABLED: booleanFlag(true),
@@ -285,9 +283,12 @@ export type AppConfig = Readonly<{
     modelsDir: string;
     sttModel: SttModelId;
     sttLanguage: string;
-    ttsVoice: TtsVoiceId;
-    ttsSpeed: number;
+    /** CPU threads of the speech-to-text engine. */
     threads: number;
+    /** DATA_DIR/voices: each character's reference voice clip (step 7). */
+    voicesDir: string;
+    /** DATA_DIR/speech-cache: spoken messages, so a replay is instant. */
+    speechCacheDir: string;
   }>;
 }>;
 
@@ -375,9 +376,9 @@ export function parseConfig(env: NodeJS.ProcessEnv): AppConfig {
       modelsDir: c.MODELS_DIR,
       sttModel: c.STT_MODEL,
       sttLanguage: c.STT_LANGUAGE,
-      ttsVoice: c.TTS_VOICE,
-      ttsSpeed: c.TTS_SPEED,
       threads: c.VOICE_THREADS,
+      voicesDir: join(c.DATA_DIR, 'voices'),
+      speechCacheDir: join(c.DATA_DIR, 'speech-cache'),
     }),
   });
 }
