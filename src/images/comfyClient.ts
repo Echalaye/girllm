@@ -52,7 +52,7 @@ const OUTPUT_KINDS = {
 type OutputKind = keyof typeof OUTPUT_KINDS;
 
 /** Upload content types accepted by uploadFile. */
-export type UploadType = 'image/png' | 'image/jpeg' | 'audio/flac';
+export type UploadType = 'image/png' | 'image/jpeg' | 'audio/flac' | 'audio/wav';
 
 export class ComfyError extends Error {
   constructor(message: string) {

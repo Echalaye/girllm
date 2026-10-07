@@ -7,6 +7,29 @@ const STT_SAMPLE_RATE = 16000;
 /** Safety cap, matches the server limit (~60 s). */
 const MAX_RECORDING_MS = 60_000;
 
+/** Rate of her voice clips (Qwen3-TTS works at 24 kHz). */
+export const VOICE_CLIP_SAMPLE_RATE = 24000;
+
+/**
+ * Decode any audio the browser can read (webm/opus recording, wav, mp3,
+ * m4a, ogg, flac…) and resample it to mono at `sampleRate`.
+ * @returns float32 samples in [-1, 1]
+ */
+export async function decodeToMono(blob, sampleRate) {
+  const ctx = new AudioContext();
+  try {
+    const decoded = await ctx.decodeAudioData(await blob.arrayBuffer());
+    const offline = new OfflineAudioContext(1, Math.max(1, Math.ceil(decoded.duration * sampleRate)), sampleRate);
+    const source = offline.createBufferSource();
+    source.buffer = decoded; // several channels are mixed down to mono
+    source.connect(offline.destination);
+    source.start();
+    return (await offline.startRendering()).getChannelData(0);
+  } finally {
+    void ctx.close();
+  }
+}
+
 /** Microphone access needs a secure context (http://127.0.0.1 or localhost qualify). */
 export const micSupported = () =>
   Boolean(window.isSecureContext && navigator.mediaDevices?.getUserMedia && window.MediaRecorder);
@@ -22,8 +45,11 @@ export class Recorder {
     return this.#recorder?.state === 'recording';
   }
 
-  /** @param {() => void} onAutoStop called if the max duration is reached. */
-  async start(onAutoStop) {
+  /**
+   * @param {() => void} onAutoStop called if the max duration is reached.
+   * @param {number} [maxMs] longest recording (default: ~60 s, the speech-to-text limit)
+   */
+  async start(onAutoStop, maxMs = MAX_RECORDING_MS) {
     this.#stream = await navigator.mediaDevices.getUserMedia({
       audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
     });
@@ -32,11 +58,14 @@ export class Recorder {
     this.#recorder.ondataavailable = (e) => e.data.size && this.#chunks.push(e.data);
     this.#stopped = new Promise((resolve) => (this.#recorder.onstop = resolve));
     this.#recorder.start();
-    this.#timer = setTimeout(onAutoStop, MAX_RECORDING_MS);
+    this.#timer = setTimeout(onAutoStop, maxMs);
   }
 
-  /** Stop and return the recording as 16 kHz mono Float32Array. */
-  async stop() {
+  /**
+   * Stop and return the recording as mono Float32Array.
+   * @param {number} [sampleRate] 16 kHz (speech-to-text) by default
+   */
+  async stop(sampleRate = STT_SAMPLE_RATE) {
     if (!this.#recorder) return new Float32Array(0);
     clearTimeout(this.#timer);
     if (this.#recorder.state !== 'inactive') this.#recorder.stop();
@@ -47,19 +76,8 @@ export class Recorder {
     this.#recorder = null;
     if (blob.size === 0) return new Float32Array(0);
 
-    // Decode (webm/opus, ogg…) with the browser, then resample to 16 kHz mono.
-    const ctx = new AudioContext();
-    try {
-      const decoded = await ctx.decodeAudioData(await blob.arrayBuffer());
-      const offline = new OfflineAudioContext(1, Math.ceil(decoded.duration * STT_SAMPLE_RATE), STT_SAMPLE_RATE);
-      const source = offline.createBufferSource();
-      source.buffer = decoded;
-      source.connect(offline.destination);
-      source.start();
-      return (await offline.startRendering()).getChannelData(0);
-    } finally {
-      void ctx.close();
-    }
+    // Decode (webm/opus, ogg…) with the browser, then resample to mono.
+    return decodeToMono(blob, sampleRate);
   }
 
   /** Abort without returning audio (e.g. page change). */

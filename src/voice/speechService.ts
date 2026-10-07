@@ -30,13 +30,15 @@ import {
   buildVoiceCloneWorkflow,
   buildVoiceDesignWorkflow,
   qwenLanguage,
+  readAloudText,
   voiceSampleText,
   type QwenLanguage,
 } from './qwenTts.js';
-import { cleanForSpeech } from './speechText.js';
-import { VoiceUnavailableError, type VoiceComponentStatus } from './types.js';
+import { cleanForSpeech, cleanTranscript } from './speechText.js';
+import { VoiceUnavailableError, type SpeechToText, type VoiceComponentStatus } from './types.js';
 import { adultVoicePrefix, assertCardVoiceSafe, assertVoiceSafe } from './voiceSafety.js';
 import type { StoredVoice, VoiceInfo, VoiceStore } from './voiceStore.js';
+import { encodeWav16, peakNormalize, resampleLinear, rms, trimSilence } from './wav.js';
 
 /** Longest text spoken at once (~1.5 minutes of speech); longer replies are cut at a sentence end. */
 export const MAX_SPEECH_CHARS = 1500;
@@ -54,6 +56,29 @@ export const DEFAULT_VOICE_DESCRIPTION = {
     'Natural, warm voice of a woman in her late twenties, medium pitch, friendly and relaxed, speaking at a calm conversational pace.',
   male: 'Natural, warm voice of a man in his late twenties, medium-low pitch, friendly and relaxed, speaking at a calm conversational pace.',
 } as const;
+
+/**
+ * A voice the user records or brings (step 7b). Qwen3-TTS clones from 3 s;
+ * 4–30 s of clear speech is the sweet spot (longer only slows every message).
+ */
+export const CUSTOM_VOICE = {
+  minSeconds: 4,
+  maxSeconds: 30,
+  /** Raw length accepted before trimming the silence around the speech. */
+  maxRawSeconds: 40,
+  /** Below this level (RMS, after trimming) the clip is mostly silence: a very quiet mic. */
+  minLevel: 0.005,
+  /** Rates the page may send (it resamples to 24 kHz, the model's own rate). */
+  sampleRates: [16_000, 22_050, 24_000, 44_100, 48_000] as readonly number[],
+} as const;
+
+/** Where a real person's voice comes from. */
+export type CustomVoiceSource = 'recorded' | 'uploaded';
+
+/** A clip that can't be used; the message says why (shown to the user, 422). */
+export class VoiceClipError extends Error {
+  readonly statusCode = 422;
+}
 
 export interface SpeechOptions {
   /** Reply-language setting (free text), mapped to a model language. */
@@ -95,6 +120,8 @@ export class SpeechService {
       cacheDir: string;
       log: SpeechLogger;
       options: Live<SpeechOptions>;
+      /** Whisper: writes down what a recorded or uploaded clip says (the clone model needs it). */
+      stt?: SpeechToText | undefined;
     },
   ) {
     this.cacheDir = resolve(deps.cacheDir);
@@ -118,6 +145,11 @@ export class SpeechService {
     }
     this.statusCache = { at: now, value };
     return value;
+  }
+
+  /** What the user reads when recording a voice, in the chat language. */
+  readAloud(): string {
+    return readAloudText(this.language());
   }
 
   /**
@@ -154,6 +186,57 @@ export class SpeechService {
     const language = this.language();
     const designed = await this.design(character, description, language, signal);
     return this.deps.voices.addCandidate(designed.flac, designed.info);
+  }
+
+  /**
+   * A real voice for her (step 7b): the user's own, recorded with the mic, or
+   * a clip of an adult who agreed to it. The CALLER checks the consent
+   * attestation. The clip is trimmed, checked (length, level), levelled,
+   * written down by Whisper and kept as a WAV candidate: nothing uses it
+   * until the user keeps it.
+   * @returns the candidate id and what Whisper heard.
+   * @throws VoiceClipError (unusable clip), VoiceUnavailableError (no Whisper)
+   */
+  async customCandidate(
+    characterId: string,
+    clip: { samples: Float32Array; sampleRate: number; source: CustomVoiceSource; consentAt: string },
+  ): Promise<{ candidate: string; transcript: string }> {
+    this.requireCharacter(characterId);
+    const { sampleRate } = clip;
+    if (!CUSTOM_VOICE.sampleRates.includes(sampleRate))
+      throw new VoiceClipError(`Unsupported sample rate ${sampleRate}`);
+    if (clip.samples.length > CUSTOM_VOICE.maxRawSeconds * sampleRate) {
+      throw new VoiceClipError(`The clip is too long: keep ${CUSTOM_VOICE.maxSeconds} seconds at most.`);
+    }
+    const speech = trimSilence(clip.samples, sampleRate);
+    const seconds = speech.length / sampleRate;
+    if (seconds < CUSTOM_VOICE.minSeconds || rms(speech) < CUSTOM_VOICE.minLevel) {
+      throw new VoiceClipError(
+        `Not enough speech: record at least ${CUSTOM_VOICE.minSeconds} seconds of clear talking, close to the microphone.`,
+      );
+    }
+    if (seconds > CUSTOM_VOICE.maxSeconds) {
+      throw new VoiceClipError(`The clip is too long: keep ${CUSTOM_VOICE.maxSeconds} seconds at most.`);
+    }
+    const levelled = peakNormalize(speech);
+
+    const stt = this.deps.stt;
+    if (!stt)
+      throw new VoiceUnavailableError('Speech recognition is needed to use a recorded voice (npm run setup:voice)');
+    const transcript = cleanTranscript(
+      await stt.transcribe({ samples: resampleLinear(levelled, sampleRate, 16_000), sampleRate: 16_000 }),
+    );
+    if (!transcript) throw new VoiceClipError('No words were recognised in this clip: speak clearly, without music.');
+
+    const candidate = await this.deps.voices.addCandidate(encodeWav16(levelled, sampleRate), {
+      text: transcript.slice(0, 1000),
+      description: clip.source === 'recorded' ? 'Recorded with the microphone' : 'Uploaded recording',
+      language: this.language(),
+      createdAt: new Date().toISOString(),
+      source: clip.source,
+      consentAt: clip.consentAt,
+    });
+    return { candidate, transcript };
   }
 
   // ---------------------------------------------------------------------------
@@ -224,8 +307,12 @@ export class SpeechService {
     const flac = await this.onGpu(async () => {
       // Named after the clip's content: a changed voice is a new file, and
       // the same voice is uploaded under the same name (overwritten).
-      const name = `girllm_voice_${characterId}_${voice.hash.slice(0, 16)}.flac`;
-      const reference = await this.deps.comfy.uploadFile(await readFile(voice.path), name, 'audio/flac');
+      const name = `girllm_voice_${characterId}_${voice.hash.slice(0, 16)}.${voice.type}`;
+      const reference = await this.deps.comfy.uploadFile(
+        await readFile(voice.path),
+        name,
+        voice.type === 'wav' ? 'audio/wav' : 'audio/flac',
+      );
       const workflow = buildVoiceCloneWorkflow({
         referenceAudio: reference,
         referenceText: voice.info.text,

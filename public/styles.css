@@ -1015,6 +1015,22 @@ dialog.editor {
   display: grid;
   align-items: center;
 }
+.voice-recorder {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border: 1px solid var(--lamp);
+  border-radius: 12px;
+}
+.voice-recorder blockquote {
+  margin: 0;
+  font-size: var(--step-0);
+  line-height: 1.5;
+}
+#voice-record-time {
+  align-self: center;
+  color: var(--danger);
+}
 .voice-candidates {
   display: grid;
   gap: 0.6rem;

@@ -185,14 +185,15 @@ async function main(): Promise<void> {
   // Her voice (step 7): Qwen3-TTS in ComfyUI, sharing the GPU gate with the
   // photos (its own client: a long reply takes longer than a photo).
   const voices = v.enabled ? new VoiceStore(v.voicesDir) : undefined;
+  const stt = new SherpaSpeechToText(() => ({
+    modelsDir: v.modelsDir,
+    model: v.sttModel,
+    language: S().sttLanguage,
+    numThreads: v.threads,
+  }));
   const voice: VoiceServices | undefined = voices
     ? {
-        stt: new SherpaSpeechToText(() => ({
-          modelsDir: v.modelsDir,
-          model: v.sttModel,
-          language: S().sttLanguage,
-          numThreads: v.threads,
-        })),
+        stt,
         tts: new SpeechService({
           comfy: new ComfyClient({ baseUrl: img.comfyUrl, timeoutMs: 300_000 }),
           gate: gpu,
@@ -202,6 +203,8 @@ async function main(): Promise<void> {
           cacheDir: v.speechCacheDir,
           log: memoryLog,
           options: () => ({ replyLanguage: language() }),
+          // Writes down what a voice the user records or brings says (step 7b).
+          stt,
         }),
       }
     : undefined;

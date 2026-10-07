@@ -438,6 +438,8 @@ describe('HTTP: her voice in the editor', () => {
         designed.push(description);
         return voices.addCandidate(fakeFlac(5), { ...info(), description });
       },
+      customCandidate: async () => ({ candidate: 'unused', transcript: '' }),
+      readAloud: () => 'Lis ceci.',
     };
     app = await buildApp({
       chat,

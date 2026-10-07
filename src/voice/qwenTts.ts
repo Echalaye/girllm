@@ -171,6 +171,17 @@ export function voiceSampleText(language: QwenLanguage): string {
     : "Hi, it's me! I'm really glad you're here. So, tell me, how was your day?";
 }
 
+/**
+ * What the user reads aloud when recording a voice for her (step 7b): ~12 s
+ * of calm, varied speech (a good cloning reference). Whisper writes down
+ * what was actually said, so reading it imperfectly is fine.
+ */
+export function readAloudText(language: QwenLanguage): string {
+  return language === 'French'
+    ? "Bonjour ! Aujourd'hui, j'ai pris le temps de me promener au bord de l'eau. Le soleil était doux, l'air sentait bon, et j'ai repensé à toutes ces petites choses qui rendent une journée agréable. Et toi, comment ça va ?"
+    : 'Hello! Today I took some time to walk by the water. The sun was gentle, the air smelled nice, and I thought about all the little things that make a day feel good. How about you, how are you doing?';
+}
+
 // ---------------------------------------------------------------------------
 // Workflows
 // ---------------------------------------------------------------------------

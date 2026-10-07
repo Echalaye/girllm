@@ -396,9 +396,11 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
 
   const voiceDisabled = { available: false, model: '', reason: 'disabled (VOICE_ENABLED=false)' };
 
-  app.get('/api/voice', async (): Promise<VoiceStatus> => ({
+  app.get('/api/voice', async (): Promise<VoiceStatus & { readAloud: string }> => ({
     stt: deps.voice ? deps.voice.stt.status() : voiceDisabled,
     tts: deps.voice ? await deps.voice.tts.status() : voiceDisabled,
+    // The sentence to read when recording a voice for her (editor).
+    readAloud: deps.voice?.tts.readAloud() ?? '',
   }));
 
   /** Body: little-endian float32 mono PCM at 16 kHz. Returns { text }. */

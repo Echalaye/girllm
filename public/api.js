@@ -114,11 +114,15 @@ export function wireDialog(dialog, { backdropClose = true, canClose = async () =
  * Ask for confirmation with the styled dialog.
  * @returns {Promise<boolean>}
  */
-export function confirmAction({ title, text, action }) {
+export function confirmAction({ title, text, action, cancel = 'Cancel', danger = true }) {
   const dialog = document.getElementById('confirm-dialog');
   document.getElementById('confirm-title').textContent = title;
   document.getElementById('confirm-text').textContent = text;
-  document.getElementById('confirm-ok').textContent = action;
+  const ok = document.getElementById('confirm-ok');
+  ok.textContent = action;
+  // Red for destructive actions (delete, discard), the normal primary style otherwise.
+  ok.classList.toggle('danger-fill', danger);
+  document.getElementById('confirm-cancel').textContent = cancel;
   dialog.returnValue = '';
   dialog.showModal();
   return new Promise((resolve) => {
