@@ -5,3 +5,5 @@ models/
 package-lock.json
 # Character cards are user content (often downloaded): keep them as-is.
 characters/
+# Flutter app: formatted with `dart format`, and its build output is not ours.
+mobile/

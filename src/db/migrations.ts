@@ -81,4 +81,16 @@ export const MIGRATIONS: readonly string[] = [
   -- without a fixed greeting; 'nudge' = she wrote after a silence.
   ALTER TABLE messages ADD COLUMN kind TEXT CHECK (kind IN ('opening', 'nudge'));
   `,
+
+  // v5 — phones paired over the local network (step 8)
+  `
+  CREATE TABLE devices (
+    id           TEXT PRIMARY KEY,
+    name         TEXT NOT NULL,
+    -- SHA-256 (hex) of the device's bearer token: the token itself is never stored.
+    token_hash   TEXT NOT NULL UNIQUE,
+    created_at   TEXT NOT NULL,
+    last_seen_at TEXT
+  );
+  `,
 ];

@@ -1,0 +1,55 @@
+<!--
+  girllm on your phone. Written before `flutter create .` (which keeps it).
+
+  Permissions, and only these:
+    - INTERNET: to reach YOUR PC on the local network (the app has no other
+      server; the PC address comes from the pairing QR code).
+    - CAMERA: to scan the pairing QR code (zxing, on the phone).
+    - RECORD_AUDIO: only when you record a voice in the editor.
+  Asked at runtime when first needed (camera, microphone).
+
+  allowBackup / fullBackupContent off: the pairing token never leaves the
+  phone through Android backups. Cleartext HTTP is refused: the app only
+  talks HTTPS to the PC's pinned certificate.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <!-- The scanner works without autofocus; don't hide the app from such phones. -->
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+
+    <application
+        android:label="girllm"
+        android:name="${applicationName}"
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:usesCleartextTraffic="false">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:taskAffinity=""
+            android:theme="@style/LaunchTheme"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true"
+            android:windowSoftInputMode="adjustResize">
+            <meta-data
+              android:name="io.flutter.embedding.android.NormalTheme"
+              android:resource="@style/NormalTheme"
+              />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+        <meta-data
+            android:name="flutterEmbedding"
+            android:value="2" />
+    </application>
+</manifest>

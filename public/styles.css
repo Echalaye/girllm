@@ -1253,3 +1253,32 @@ dialog.editor {
     transition: none !important;
   }
 }
+
+/* Settings → Phone app (step 8). */
+.pairing-qr {
+  display: grid;
+  gap: 0.5rem;
+  justify-items: start;
+}
+.pairing-qr img {
+  width: min(16rem, 100%);
+  aspect-ratio: 1;
+  background: #fff; /* a QR code needs a light background in both themes */
+  border-radius: 8px;
+}
+.device-list {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.device-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.5rem;
+}
+.device-list li button {
+  margin-left: auto;
+}

@@ -3,6 +3,7 @@
 // "Restore .env values". Changes apply to the next message, no restart.
 
 import { api, confirmAction, el, wireDialog } from './api.js';
+import { PhonePairing } from './phone.js';
 
 /**
  * Form description. `type`: text | textarea | number | range | select.
@@ -217,6 +218,9 @@ export class SettingsPanel {
     this.form = document.getElementById('settings-form');
     this.status = document.getElementById('settings-status');
     this.values = null;
+    /** "Phone app" section (step 8): pairing by QR code, paired phones. */
+    this.phone = new PhonePairing();
+    this.dialog.addEventListener('close', () => this.phone.stop());
     // Like the editor: no closing on a stray click outside, and a
     // confirmation before discarding unsaved changes.
     wireDialog(this.dialog, { backdropClose: false, canClose: () => this.#confirmDiscard() });
@@ -249,6 +253,7 @@ export class SettingsPanel {
         for (const field of group.fields) fieldset.append(this.#field(field, overridden.has(field.key)));
         return fieldset;
       }),
+      this.phone.element(),
     );
   }
 

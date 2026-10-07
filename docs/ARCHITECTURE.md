@@ -87,6 +87,12 @@ public/voice.js (🔊, playback queue) ──► /api/tts ──► voice/speech
 | `src/voice/voiceStore.ts`                             | Each character's reference clip + transcript (`data/voices`), editor candidates (1 h), atomic writes, validated ids                         |
 | `src/voice/voiceSafety.ts`                            | Adult voices only: minor / young-look / child-voice words, card age check, "adult" prefix                                                   |
 | `src/http/clientAbort.ts`                             | Cancels a long GPU request (photo, voice) when the browser disconnects                                                                      |
+| `src/lan/tls.ts`                                      | Step 8: self-signed ECDSA P-256 certificate (hand-built DER), SHA-256 fingerprint, `data/lan/`                                              |
+| `src/lan/network.ts`                                  | Private-address check (IPv4/IPv6) and this PC's private IPv4 addresses for the QR code                                                      |
+| `src/lan/devices.ts`                                  | `DeviceStore`: one-time pairing code (5 min, 5 tries), phone tokens (SHA-256 only), revoke                                                  |
+| `src/lan/lanAccess.ts`                                | PC-only pairing/phone routes (QR SVG); phone listener guard (private address, no Origin, bearer)                                            |
+| `public/phone.js`                                     | Settings → _Phone app_: QR code with countdown, paired phones, Remove                                                                       |
+| `mobile/`                                             | Android app (Flutter): pinned HTTPS client, QR pairing, chat, photos, voice, editor ([README](../mobile/README.md))                         |
 | `scripts/setupVoice.ts`                               | `npm run setup:voice`: Whisper (download, checksum, atomic extract) and Qwen3-TTS into ComfyUI                                              |
 | `scripts/comfySetupLib.ts`                            | Shared by the setups: node pack at a pinned commit, verified model files, missing Python packages at exact versions                         |
 | `public/voice.js`                                     | `Recorder` (mic → 16 kHz mono float32) and `Speaker` (ordered playback, per-message progress, preparing/playing state, `whenIdle()`)        |
@@ -136,7 +142,7 @@ logged, never shown to the user.
 If the embedding backend is down, memories are stored without a vector and retrieval falls back to recency. The
 chat keeps working, with a warning logged at most once a minute.
 
-## Database schema (v4)
+## Database schema (v5)
 
 | Table                    | Key columns                                                                                                                                                                                     |
 | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -147,6 +153,7 @@ chat keeps working, with a warning logged at most once a minute.
 | `messages.kind` (v4)     | `NULL` = a reply; `opening` / `nudge` = a message she wrote first (prevents two nudges in a row; "rewrite" keeps the kind)                                                                      |
 | `settings` (v3)          | `key`, `value` (JSON), `updated_at`: only the values changed from the app; absent = `.env` default                                                                                              |
 | `memories`               | `id`, `character_id`, `category` (`user`/`character`/`relationship`/`event`), `content`, `embedding` (float32 BLOB, L2-normalised), `embedding_model`, `source_session_id` → set NULL on delete |
+| `devices` (v5)           | `id` (UUID), `name`, `token_hash` (SHA-256 hex, unique), `created_at`, `last_seen_at`: paired phones (step 8)                                                                                   |
 
 Vectors are only compared with vectors from the same `embedding_model`, so changing the model never mixes
 incompatible spaces. Old memories then rank by recency until they are re-learned.
@@ -206,10 +213,15 @@ incompatible spaces. Old memories then rank by recency until they are re-learned
 | GET    | `/api/characters/:id/voice/candidates/:cid` | —                                                                                                                               | `audio/flac` (kept 1 h)                                                       |
 | POST   | `/api/characters/:id/voice/candidates/:cid` | —                                                                                                                               | `204`: the candidate becomes her voice                                        |
 | PUT    | `/api/characters/:id/voice/candidates`      | float32 LE mono PCM, `?rate=24000&source=recorded\|uploaded` + header `x-girllm-consent: own-voice-or-consenting-adult`, ≤ 8 MB | `{ candidate, transcript }` (WAV); `428` without consent; `422` unusable clip |
+| GET    | `/api/lan`                                  | —                                                                                                                               | `{ enabled, port, addresses, fingerprint, devices[] }` (PC only)              |
+| POST   | `/api/lan/pairing`                          | —                                                                                                                               | `{ payload, svg, expiresAt, addresses, port }`: new QR code (PC only)         |
+| DELETE | `/api/lan/pairing`                          | —                                                                                                                               | `204` (PC only)                                                               |
+| DELETE | `/api/lan/devices/:id`                      | —                                                                                                                               | `204`: the phone's token stops working (PC only)                              |
+| POST   | `/api/pair`                                 | `{ code, name }` (phone listener only, no token)                                                                                | `{ token, device }`; `403` wrong/expired code                                 |
 
 Error statuses: `400` invalid input · `403` cross-origin · `404` not found · `409` already generating or duplicate ·
 `413` prompt or upload too large · `415` wrong content type · `421` wrong Host · `422` photo, voice or character
-refused (safety) · `428` face upload without consent ·
+refused (safety) · `428` face upload without consent · `401` phone token missing or revoked ·
 `502` LLM backend or ComfyUI error · `503` voice/photos not installed or disabled.
 
 ## Tooling
@@ -347,6 +359,47 @@ designed candidates stay in the list, and closing the editor with one never kept
 `encodeWav16`, `VoiceStore.addCandidate` with `source` and `consentAt`. The store recognises FLAC/WAV by their
 first bytes, serves them with the matching type, and keeps one clip per character whatever its format. Cloning
 uploads the WAV as `girllm_voice_<id>_<hash16>.wav` (`audio/wav`).
+
+## Step 8: the phone app on your local network
+
+**Two listeners, one API.** `index.ts` builds the Fastify app twice from the same services (`shared` deps):
+the PC page on `HOST:PORT` (`mode: 'local'`, unchanged) and, with `LAN_ENABLED=true`, the phone listener on
+`0.0.0.0:LAN_PORT` (`mode: 'lan'`). In `lan` mode `app.ts` serves HTTPS with the PC's certificate, skips the
+static files, the Host allow-list (phones use the IP) and the PC-only routes (`/api/settings`, `/api/lan*`), and
+installs `guardLanListener` first:
+
+```
+onRequest ─► remote address private? (isPrivateAddress)          no → 403
+          ─► Origin header?                                       yes → 403 (no browser can call it)
+          ─► POST /api/pair ?  → DeviceStore.pair(code, name)     → { token } / 403
+          ─► Bearer token → DeviceStore.authenticate(sha256)      none/revoked → 401
+          ─► the usual routes (same zod validation, limits, safety checks)
+```
+
+**Certificate** (`tls.ts`). Made once with `generateKeyPairSync('ec', P-256)` and a minimal hand-written X.509
+v3 DER (subject = issuer `CN=girllm (local network)`, 10 years, starting 1 h early to tolerate a slow phone
+clock, ECDSA-SHA256, random positive serial), stored in `data/lan/key.pem` (mode 0600) and `cert.pem`; made again
+once expired. No dependency, and no hostname or SAN needed: phones don't check it against CAs or names, they pin
+`sha256(DER)`. Deleting `data/lan` makes a new one; paired phones then refuse the PC and must pair again.
+
+**Pairing** (`devices.ts`). Settings → _Phone app_ → `POST /api/lan/pairing` makes a one-time code (120 bits,
+base32, 5 minutes, 5 attempts, a new code replaces the old) and returns the QR code as SVG (`qrcode`, rendered as
+an `<img>` data URL: no inline script for the CSP):
+`girllm://pair?v=1&a=<ip>,<ip>&p=<port>&c=<code>&f=<sha256 hex>`. The phone posts the code to `/api/pair`; the
+PC answers a random 32-byte token (base64url) and stores only its SHA-256, so a stolen database can't be used to
+connect. The page polls `/api/lan` every 2.5 s to show the new phone.
+
+**The app** (`mobile/`, Flutter, Android). `PinnedClient` uses `dart:io` `HttpClient` with an empty
+`SecurityContext` (no system CAs), `badCertificateCallback` = `sha256(cert.der) == fingerprint`, and
+`findProxy = DIRECT` (no proxy can see or redirect the traffic). Only private IPv4 addresses from the QR code are
+accepted; it tries each until one answers and remembers it first. The connection (addresses, port,
+fingerprint, token) is in flutter_secure_storage (Android Keystore); `allowBackup=false` and data-extraction
+rules keep it out of backups. Replies stream over SSE (`SseParser`), photos and pictures go through an in-memory
+LRU (`PictureCache`), her voice (FLAC) through a temporary file played by just_audio. The editor keeps the whole
+card it loaded and sends it back, so fields the phone doesn't show (lorebook) are preserved. A recorded voice is
+16-bit PCM at 24 kHz from `record`, converted to float32 (`pcm16ToFloat32Le`) and sent with the same consent
+header as the page, then kept at once; faces come from Android's photo picker (no storage permission) with the
+same consent header. The QR scanner is zxing-cpp (`flutter_zxing`), not ML Kit, which reports usage to Google.
 
 ## Step 4d flows
 
