@@ -48,10 +48,27 @@ import { MAX_SPEECH_CHARS } from '../voice/speechService.js';
 import { VoiceUnavailableError, type VoiceServices, type VoiceStatus } from '../voice/types.js';
 import { VoiceRefusedError } from '../voice/voiceSafety.js';
 import { withClientAbort } from './clientAbort.js';
+import type { DeviceStore } from '../lan/devices.js';
+import { guardLanListener, registerLanAdminRoutes, type LanInfo } from '../lan/lanAccess.js';
 import type { VoiceStore } from '../voice/voiceStore.js';
 import { decodeFloat32 } from '../voice/wav.js';
 
 export interface AppDeps {
+  /**
+   * Which server this is (step 8):
+   *  - 'local' (default): the PC's own server on 127.0.0.1 — the web page, and
+   *    the phone pairing management;
+   *  - 'lan': the phone listener — HTTPS (pinned self-signed certificate),
+   *    private network only, a paired phone's token on every API route, no
+   *    web page, no pairing management.
+   */
+  mode?: 'local' | 'lan';
+  /** TLS key and certificate (PEM): required for the 'lan' mode. */
+  https?: { key: string; cert: string } | undefined;
+  /** Paired phones (required for 'lan'; on 'local', for the pairing routes). */
+  devices?: DeviceStore | undefined;
+  /** The phone listener as seen from the PC (null = LAN_ENABLED=false). */
+  lan?: LanInfo | null;
   chat: ChatService;
   characters: CharacterRepository;
   llm: LlmProvider;
@@ -173,32 +190,41 @@ function httpError(err: unknown): { status: number; message: string } {
 }
 
 export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
+  const lanMode = deps.mode === 'lan';
+  if (lanMode && (!deps.https || !deps.devices))
+    throw new Error('The phone listener needs a TLS certificate and the device store');
   const app = Fastify({
     logger: deps.logger ?? false,
     bodyLimit: 64 * 1024, // chat messages are small; refuse big payloads early
+    ...(lanMode ? { https: deps.https } : {}),
   });
 
   const allowedHosts = new Set(deps.allowedHosts.map((h) => h.toLowerCase()));
 
+  // Phone listener: private network + paired token (replaces the Host check:
+  // phones connect by IP, and a browser can't present the token anyway).
+  if (lanMode) guardLanListener(app, deps.devices!);
+
   // DNS-rebinding + cross-site protection, before any route runs.
-  app.addHook('onRequest', async (request, reply) => {
-    const host = (request.headers.host ?? '').toLowerCase();
-    if (!allowedHosts.has(host)) {
-      return reply.code(421).send({ error: 'Host not allowed' });
-    }
-    const origin = request.headers.origin;
-    if (origin && origin !== 'null') {
-      let originHost = '';
-      try {
-        originHost = new URL(origin).host.toLowerCase();
-      } catch {
-        /* invalid Origin -> rejected below */
+  if (!lanMode)
+    app.addHook('onRequest', async (request, reply) => {
+      const host = (request.headers.host ?? '').toLowerCase();
+      if (!allowedHosts.has(host)) {
+        return reply.code(421).send({ error: 'Host not allowed' });
       }
-      if (!allowedHosts.has(originHost)) {
-        return reply.code(403).send({ error: 'Cross-origin request refused' });
+      const origin = request.headers.origin;
+      if (origin && origin !== 'null') {
+        let originHost = '';
+        try {
+          originHost = new URL(origin).host.toLowerCase();
+        } catch {
+          /* invalid Origin -> rejected below */
+        }
+        if (!allowedHosts.has(originHost)) {
+          return reply.code(403).send({ error: 'Cross-origin request refused' });
+        }
       }
-    }
-  });
+    });
 
   await app.register(helmet, {
     contentSecurityPolicy: {
@@ -233,8 +259,9 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     },
   );
 
-  await app.register(fastifyStatic, { root: PUBLIC_DIR, prefix: '/' });
-  if (existsSync(FONT_DIR)) {
+  // The web page is for the PC only: the phone listener serves the API alone.
+  if (!lanMode) await app.register(fastifyStatic, { root: PUBLIC_DIR, prefix: '/' });
+  if (!lanMode && existsSync(FONT_DIR)) {
     await app.register(fastifyStatic, {
       root: FONT_DIR,
       prefix: '/fonts/',
@@ -259,7 +286,11 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     chatBackground: deps.settings?.get().chatBackground ?? 'subtle',
   }));
 
-  if (deps.settings) {
+  // Pairing phones is done from the PC only, never from a phone.
+  if (!lanMode) registerLanAdminRoutes(app, deps.lan ?? null, deps.devices);
+
+  // App settings (model, ComfyUI…) are changed from the PC only, like pairing.
+  if (deps.settings && !lanMode) {
     registerSettingsRoutes(app, {
       settings: deps.settings,
       llm: deps.llm,
@@ -396,9 +427,11 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
 
   const voiceDisabled = { available: false, model: '', reason: 'disabled (VOICE_ENABLED=false)' };
 
-  app.get('/api/voice', async (): Promise<VoiceStatus> => ({
+  app.get('/api/voice', async (): Promise<VoiceStatus & { readAloud: string }> => ({
     stt: deps.voice ? deps.voice.stt.status() : voiceDisabled,
     tts: deps.voice ? await deps.voice.tts.status() : voiceDisabled,
+    // The sentence to read when recording a voice for her (editor).
+    readAloud: deps.voice?.tts.readAloud() ?? '',
   }));
 
   /** Body: little-endian float32 mono PCM at 16 kHz. Returns { text }. */

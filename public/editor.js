@@ -5,6 +5,7 @@
 // textContent; images and audio are served by the local API.
 
 import { api, confirmAction, ensureOk, wireDialog } from './api.js';
+import { decodeToMono, micSupported, Recorder, VOICE_CLIP_SAMPLE_RATE } from './voice.js';
 
 /** Card fields edited as plain text inputs (tags and style are handled apart). */
 const TEXT_FIELDS = [
@@ -23,6 +24,17 @@ const TEXT_FIELDS = [
 
 /** Voice candidates kept on screen to compare (newest first). */
 const MAX_VOICE_CANDIDATES = 3;
+
+/** Voice description placeholder per gender. */
+const VOICE_HINTS = {
+  female: 'Woman in her late twenties, warm and slightly husky voice, calm, a little playful, speaks softly',
+  male: 'Man in his late twenties, deep and calm voice, slightly husky, relaxed, speaks slowly',
+};
+
+/** A real voice (step 7b): the server accepts 40 s raw, 30 s of speech; files are decoded by the browser. */
+const VOICE_CLIP = { maxRecordMs: 35_000, maxSeconds: 40, maxFileBytes: 20 * 1024 * 1024 };
+/** Header value attesting the voice is the user's own or a consenting adult's (checked by the server). */
+const VOICE_CONSENT = 'own-voice-or-consenting-adult';
 
 const $ = (id) => document.getElementById(id);
 
@@ -61,6 +73,7 @@ export class CharacterEditor {
    *   photosAvailable: (artStyle?: string) => boolean,
    *   faceSupport: (artStyle: string) => { ready: boolean, reason?: string } | undefined,
    *   voiceStatus: () => { available: boolean, reason?: string } | null,
+   *   readAloud: () => string,
    * }} handlers
    */
   constructor(handlers) {
@@ -72,6 +85,9 @@ export class CharacterEditor {
     this.generation = null;
     /** Aborts a running voice design when the editor closes. */
     this.voiceGeneration = null;
+    /** Microphone recording of a real voice (step 7b). */
+    this.voiceRecorder = new Recorder();
+    this.voiceRecordTimer = null;
     /** JSON of the form as last loaded or saved, to detect unsaved changes. */
     this.savedState = '';
     /**
@@ -82,10 +98,15 @@ export class CharacterEditor {
     this.discarded = false;
     // A click outside must never throw away what was typed: only ✕ / Esc
     // close the editor, and they ask first when there are unsaved changes.
-    wireDialog(this.dialog, { backdropClose: false, canClose: () => this.#confirmDiscard() });
+    // Closing also offers to keep a designed voice that was never kept.
+    wireDialog(this.dialog, {
+      backdropClose: false,
+      canClose: async () => (await this.#offerUnkeptVoice()) && this.#confirmDiscard(),
+    });
     this.dialog.addEventListener('close', () => {
       this.generation?.abort();
       this.voiceGeneration?.abort();
+      this.#cancelVoiceRecording();
       // Silence any voice preview still playing.
       this.dialog.querySelectorAll('audio').forEach((a) => a.pause());
       // Closed with unsaved changes without choosing "Discard" (e.g. the
@@ -110,12 +131,21 @@ export class CharacterEditor {
     }
     $('voice-generate').addEventListener('click', () => void this.#designVoice());
     $('voice-remove').addEventListener('click', () => void this.#removeVoice());
+    $('voice-record').addEventListener('click', () => void this.#startVoiceRecording());
+    $('voice-record-stop').addEventListener('click', () => void this.#stopVoiceRecording());
+    $('voice-record-cancel').addEventListener('click', () => this.#cancelVoiceRecording());
+    $('voice-upload').addEventListener('click', () => void this.#pickVoiceFile());
+    $('voice-file').addEventListener('change', () => void this.#useVoiceFile());
     $('face-upload').addEventListener('click', () => void this.#askConsentThenPick());
     $('face-file').addEventListener('change', () => void this.#uploadFace());
     // The appearance hint and face note follow the art style.
     this.form
       .querySelectorAll('input[name="artStyle"]')
       .forEach((r) => r.addEventListener('change', () => this.#renderStyleHints()));
+    // "Her voice" / "His voice" follow the gender.
+    this.form
+      .querySelectorAll('input[name="gender"]')
+      .forEach((r) => r.addEventListener('change', () => this.#renderVoiceWording()));
     $('lore-add').addEventListener('click', () => {
       const item = this.#loreItem();
       $('lore-list').append(item);
@@ -149,7 +179,7 @@ export class CharacterEditor {
     this.#voiceStatus('');
     $('voice-candidates').hidden = true;
     $('voice-candidates').replaceChildren();
-    $('voice-generate').textContent = 'Create her voice';
+    this.#renderVoiceWording();
     this.#renderLore([]);
     this.#renderStyleHints();
     this.dialog.showModal();
@@ -169,6 +199,7 @@ export class CharacterEditor {
       this.form.elements.namedItem('background').value = data.card.background;
       this.form.elements.namedItem('backgroundScene').value = data.card.backgroundScene ?? '';
       this.#showVoice(Boolean(data.voice));
+      this.#renderVoiceWording();
       this.#renderLore(data.card.lorebook ?? []);
       this.#renderStyleHints();
       this.#showPicture('face', data.hasFace);
@@ -228,6 +259,26 @@ export class CharacterEditor {
   // listens to one or more candidates and keeps one. Every message she
   // speaks is then said with that exact voice.
 
+  /** Pronouns of the character being edited (from the gender radio). */
+  #pronouns() {
+    const male = this.form.querySelector('input[name="gender"]:checked')?.value === 'male';
+    return male
+      ? { subject: 'he', possessive: 'his', Possessive: 'His' }
+      : { subject: 'she', possessive: 'her', Possessive: 'Her' };
+  }
+
+  /** "Her voice" / "His voice" in the section title and buttons. */
+  #renderVoiceWording() {
+    const p = this.#pronouns();
+    $('voice-title').textContent = `${p.Possessive} voice`;
+    const button = $('voice-generate');
+    button.textContent = $('voice-candidates').children.length
+      ? 'Create another voice'
+      : `Create ${p.possessive} voice`;
+    $('voice-current').querySelector('audio')?.setAttribute('aria-label', `${p.Possessive} voice`);
+    $('voice-description').placeholder = VOICE_HINTS[p.subject === 'he' ? 'male' : 'female'];
+  }
+
   #voiceUrl(path = '') {
     return `/api/characters/${encodeURIComponent(this.id)}/voice${path}`;
   }
@@ -247,7 +298,7 @@ export class CharacterEditor {
     audio.controls = true;
     audio.preload = 'none';
     audio.src = `${this.#voiceUrl()}?v=${Date.now()}`; // fresh after a change
-    audio.setAttribute('aria-label', 'Her voice');
+    audio.setAttribute('aria-label', `${this.#pronouns().Possessive} voice`);
     box.replaceChildren(audio);
   }
 
@@ -256,19 +307,25 @@ export class CharacterEditor {
     const field = $('voice-description');
     const description = field.value.trim();
     if (!description) {
-      this.#voiceStatus('Describe her voice first.', true);
+      this.#voiceStatus(`Describe ${this.#pronouns().possessive} voice first.`, true);
       field.focus();
       return;
     }
     const status = this.handlers.voiceStatus();
     if (status && !status.available) {
-      this.#voiceStatus(`Her voice is unavailable: ${status.reason ?? 'not installed'}.`, true);
+      this.#voiceStatus(
+        `${this.#pronouns().Possessive} voice is unavailable: ${status.reason ?? 'not installed'}.`,
+        true,
+      );
       return;
     }
     const button = $('voice-generate');
     button.disabled = true;
     const started = Date.now();
-    const tick = () => this.#voiceStatus(`Creating her voice… ${Math.round((Date.now() - started) / 1000)} s`);
+    const tick = () =>
+      this.#voiceStatus(
+        `Creating ${this.#pronouns().possessive} voice… ${Math.round((Date.now() - started) / 1000)} s`,
+      );
     let timer;
     try {
       await this.#save();
@@ -295,6 +352,122 @@ export class CharacterEditor {
     }
   }
 
+  // A real voice (step 7b): recorded with the mic or taken from a file, only
+  // after the user confirms it is their own or a consenting adult's. The page
+  // decodes it to 24 kHz mono; the server checks it, writes down what it says
+  // (Whisper) and returns a candidate, kept like a designed voice.
+
+  /** "Whose voice is it?" @returns true when the user confirmed. */
+  async #askVoiceConsent() {
+    const dialog = $('voice-consent-dialog');
+    $('voice-consent-check').checked = false;
+    dialog.returnValue = '';
+    dialog.showModal();
+    const answer = await new Promise((resolve) =>
+      dialog.addEventListener('close', () => resolve(dialog.returnValue), { once: true }),
+    );
+    return answer === 'ok';
+  }
+
+  async #startVoiceRecording() {
+    if (!micSupported()) {
+      this.#voiceStatus('The microphone only works on http://127.0.0.1 or localhost.', true);
+      return;
+    }
+    if (!(await this.#askVoiceConsent())) return;
+    try {
+      await this.#save(); // the clip belongs to a saved character
+      await this.voiceRecorder.start(() => void this.#stopVoiceRecording(), VOICE_CLIP.maxRecordMs);
+    } catch (err) {
+      this.#voiceStatus(err.name === 'NotAllowedError' ? 'Microphone access was denied.' : err.message, true);
+      return;
+    }
+    $('voice-read-text').textContent = this.handlers.readAloud();
+    $('voice-recorder').hidden = false;
+    $('voice-record').disabled = $('voice-upload').disabled = true;
+    const started = Date.now();
+    const tick = () => {
+      $('voice-record-time').textContent = `● ${Math.round((Date.now() - started) / 1000)} s`;
+    };
+    tick();
+    this.voiceRecordTimer = setInterval(tick, 500);
+    this.#voiceStatus('Recording…');
+  }
+
+  async #stopVoiceRecording() {
+    if (!this.voiceRecorder.recording) return;
+    const samples = await this.voiceRecorder.stop(VOICE_CLIP_SAMPLE_RATE);
+    this.#endVoiceRecordingUi();
+    await this.#sendVoiceClip(samples, 'recorded');
+  }
+
+  #cancelVoiceRecording() {
+    this.voiceRecorder.cancel();
+    this.#endVoiceRecordingUi();
+  }
+
+  #endVoiceRecordingUi() {
+    clearInterval(this.voiceRecordTimer);
+    this.voiceRecordTimer = null;
+    $('voice-recorder').hidden = true;
+    $('voice-record').disabled = $('voice-upload').disabled = false;
+  }
+
+  async #pickVoiceFile() {
+    if (await this.#askVoiceConsent()) $('voice-file').click();
+  }
+
+  async #useVoiceFile() {
+    const input = $('voice-file');
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+    if (file.size > VOICE_CLIP.maxFileBytes) {
+      this.#voiceStatus('This file is too large: use a clip of 30 seconds at most.', true);
+      return;
+    }
+    let samples;
+    try {
+      samples = await decodeToMono(file, VOICE_CLIP_SAMPLE_RATE);
+    } catch {
+      this.#voiceStatus("This file can't be read as audio (try WAV, MP3, M4A or OGG).", true);
+      return;
+    }
+    if (samples.length > VOICE_CLIP.maxSeconds * VOICE_CLIP_SAMPLE_RATE) {
+      this.#voiceStatus('This clip is too long: cut it to 30 seconds of clear speech.', true);
+      return;
+    }
+    await this.#sendVoiceClip(samples, 'uploaded');
+  }
+
+  /** Send the decoded clip; the server answers with a candidate and what it heard. */
+  async #sendVoiceClip(samples, source) {
+    if (!samples.length) {
+      this.#voiceStatus('Nothing was recorded.', true);
+      return;
+    }
+    try {
+      await this.#save();
+      this.#voiceStatus('Checking the recording…');
+      const query = new URLSearchParams({ rate: String(VOICE_CLIP_SAMPLE_RATE), source });
+      const res = await fetch(`${this.#voiceUrl('/candidates')}?${query}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/octet-stream', 'x-girllm-consent': VOICE_CONSENT },
+        body: samples, // raw little-endian float32
+      });
+      await ensureOk(res);
+      const { candidate, transcript } = await res.json();
+      // A real voice is a deliberate choice (and consent was given): it becomes
+      // the voice right away, nothing to compare. Designed voices are compared first.
+      if (await this.#keepVoice(candidate)) {
+        const what = source === 'recorded' ? 'your recording' : 'this recording';
+        this.#voiceStatus(`Saved: ${this.#pronouns().subject} speaks with ${what} now. Heard: “${transcript}”`);
+      }
+    } catch (err) {
+      this.#voiceStatus(err.message, true);
+    }
+  }
+
   /** A new candidate on top of the list (the oldest ones beyond the limit go away). */
   #addVoiceCandidate(cid, description) {
     const list = $('voice-candidates');
@@ -311,6 +484,7 @@ export class CharacterEditor {
     keep.className = 'secondary small';
     keep.textContent = 'Keep this voice';
     keep.addEventListener('click', () => void this.#keepVoice(cid));
+    li.dataset.cid = cid;
     li.append(audio, note, keep);
     list.prepend(li);
     while (list.children.length > MAX_VOICE_CANDIDATES) list.lastElementChild.remove();
@@ -319,17 +493,41 @@ export class CharacterEditor {
     audio.play().catch(() => {});
   }
 
+  /** Make a candidate the voice. @returns true when it worked (errors are shown). */
   async #keepVoice(cid) {
     try {
       await api(this.#voiceUrl(`/candidates/${cid}`), { method: 'POST' });
       $('voice-candidates').hidden = true;
       $('voice-candidates').replaceChildren();
-      $('voice-generate').textContent = 'Create her voice';
       this.#showVoice(true);
-      this.#voiceStatus('Saved: she speaks with this voice now.');
+      this.#renderVoiceWording();
+      this.#voiceStatus(`Saved: ${this.#pronouns().subject} speaks with this voice now.`);
+      return true;
     } catch (err) {
       this.#voiceStatus(err.message, true);
+      return false;
     }
+  }
+
+  /**
+   * Closing with designed voices that were never kept: offer to keep the
+   * latest one, instead of silently getting a default voice later.
+   * @returns true (the editor closes either way)
+   */
+  async #offerUnkeptVoice() {
+    const latest = $('voice-candidates').firstElementChild?.dataset.cid;
+    if (!latest || !this.id) return true;
+    const p = this.#pronouns();
+    const keep = await confirmAction({
+      title: 'Keep the voice you created?',
+      text: `You created a voice but didn't keep it. Without one, a default voice is made the first time ${p.subject} speaks.`,
+      action: 'Keep the latest',
+      cancel: "Don't keep",
+      danger: false,
+    });
+    if (keep) await this.#keepVoice(latest);
+    $('voice-candidates').replaceChildren(); // asked once
+    return true;
   }
 
   async #removeVoice() {

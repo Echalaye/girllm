@@ -71,6 +71,8 @@ const state = {
   pictureBust: '',
   /** Her voice (/api/voice `tts`): { available, model, reason? } once known. */
   ttsStatus: null,
+  /** What to read when recording a voice for her (editor, chat language). */
+  readAloud: '',
   /** Running hands-free call, if any. */
   call: null,
   /** She writes first after this many minutes of silence (0 = never). */
@@ -947,6 +949,7 @@ async function initVoice() {
   const voice = await api('/api/voice').catch(() => null);
   const ttsReady = Boolean(voice?.tts.available);
   state.ttsStatus = voice?.tts ?? null;
+  state.readAloud = voice?.readAloud ?? '';
   // 🔊 on her messages (CSS shows them only when her voice works).
   els.messages.dataset.tts = ttsReady ? 'on' : 'off';
   if (voice && !ttsReady && !/disabled/.test(voice.tts.reason ?? '')) {
@@ -999,6 +1002,7 @@ const editor = new CharacterEditor({
   photosAvailable: (artStyle) => Boolean(styleStatus(artStyle)?.available),
   faceSupport: (artStyle) => styleStatus(artStyle)?.face,
   voiceStatus: () => state.ttsStatus,
+  readAloud: () => state.readAloud,
   onSaved: (summary) => {
     report(
       (async () => {

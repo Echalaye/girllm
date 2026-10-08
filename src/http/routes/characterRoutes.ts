@@ -18,7 +18,8 @@ import { ImageUnavailableError, type ImageService } from '../../images/imageServ
 import { detectImageType, sanitizeImage } from '../../images/imageSanitizer.js';
 import { MAX_VOICE_DESCRIPTION_CHARS } from '../../characters/schema.js';
 import { VoiceUnavailableError, type TextToSpeech } from '../../voice/types.js';
-import type { VoiceStore } from '../../voice/voiceStore.js';
+import { audioContentType, type VoiceStore } from '../../voice/voiceStore.js';
+import { decodeFloat32 } from '../../voice/wav.js';
 import { withClientAbort } from '../clientAbort.js';
 
 export interface CharacterRoutesDeps {
@@ -37,6 +38,19 @@ const CharacterId = z.string().regex(/^[a-z0-9-]{1,80}$/);
 const IdParams = z.object({ id: CharacterId });
 const CandidateParams = z.object({ id: CharacterId, candidateId: z.string().uuid() });
 const VoiceDesignBody = z.object({ description: z.string().trim().min(1).max(MAX_VOICE_DESCRIPTION_CHARS) });
+const VoiceClipQuery = z.object({
+  rate: z.coerce.number().int(),
+  source: z.enum(['recorded', 'uploaded']),
+});
+
+/**
+ * Header the editor must send with a recorded or uploaded voice (step 7b):
+ * the user's attestation that it is their own voice, or that of an adult who
+ * agreed to it being used here.
+ */
+export const VOICE_CONSENT_VALUE = 'own-voice-or-consenting-adult';
+/** Voice clips: float32 mono, up to 40 s at 48 kHz (~7.7 MB). */
+const MAX_VOICE_CLIP_BYTES = 8 * 1024 * 1024;
 
 /** Header the editor must send with a face upload: the user's explicit attestation. */
 export const CONSENT_HEADER = 'x-girllm-consent';
@@ -228,8 +242,12 @@ export function registerCharacterRoutes(app: FastifyInstance, deps: CharacterRou
 
   const { voices, tts } = deps;
   if (voices) {
-    const flac = (reply: FastifyReply, bytes: Buffer) =>
-      reply.header('Content-Type', 'audio/flac').header('Cache-Control', 'no-cache').send(bytes);
+    /** A stored clip (FLAC or WAV: the extension is set by the store, never by the client). */
+    const sendClip = async (reply: FastifyReply, path: string) =>
+      reply
+        .header('Content-Type', audioContentType(path))
+        .header('Cache-Control', 'no-cache')
+        .send(await readFile(path));
 
     /** Her reference clip (what her voice sounds like). */
     app.get('/api/characters/:id/voice', async (request, reply) => {
@@ -237,7 +255,7 @@ export function registerCharacterRoutes(app: FastifyInstance, deps: CharacterRou
       requireCharacter(id);
       const voice = await voices.get(id);
       if (!voice) throw new NotFoundHttpError('No voice for this character yet');
-      return flac(reply, await readFile(voice.path));
+      return sendClip(reply, voice.path);
     });
 
     /** Forget her voice: a new one is made from her description the next time she speaks. */
@@ -263,7 +281,32 @@ export function registerCharacterRoutes(app: FastifyInstance, deps: CharacterRou
       const { candidateId } = CandidateParams.parse(request.params);
       const path = voices.candidatePath(candidateId);
       if (!path) throw new NotFoundHttpError('Candidate expired');
-      return flac(reply, await readFile(path));
+      return sendClip(reply, path);
+    });
+
+    /**
+     * A real voice for her (step 7b): float32 LE mono PCM recorded with the
+     * mic or decoded from a file by the page, `?rate=24000&source=recorded`.
+     * Requires the consent header. Returns the candidate and what Whisper
+     * heard; the user listens, then keeps it like a designed voice.
+     */
+    app.put('/api/characters/:id/voice/candidates', { bodyLimit: MAX_VOICE_CLIP_BYTES }, async (request) => {
+      const { id } = IdParams.parse(request.params);
+      requireCharacter(id);
+      if (request.headers[CONSENT_HEADER] !== VOICE_CONSENT_VALUE) {
+        throw badRequest('Please confirm it is your own voice, or that of an adult who agreed to it', 428);
+      }
+      const { rate, source } = VoiceClipQuery.parse(request.query);
+      if (!Buffer.isBuffer(request.body)) throw badRequest('Send the audio as application/octet-stream', 415);
+      if (request.body.byteLength % 4 !== 0) throw badRequest('Audio must be float32 samples');
+      if (!tts) throw new VoiceUnavailableError('Voice is disabled (VOICE_ENABLED=false)');
+      await voices.cleanupCandidates(CANDIDATE_TTL_MS);
+      return tts.customCandidate(id, {
+        samples: decodeFloat32(request.body),
+        sampleRate: rate,
+        source,
+        consentAt: new Date().toISOString(),
+      });
     });
 
     /** Keep a designed voice as hers. */

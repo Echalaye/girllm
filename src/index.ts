@@ -26,6 +26,9 @@ import { GatedEmbeddingProvider, GatedLlmProvider } from './llm/gated.js';
 import { GpuGate } from './util/gpuGate.js';
 import { defaultsFromConfig } from './settings/settingsSchema.js';
 import { SettingsService } from './settings/settingsService.js';
+import { DeviceStore } from './lan/devices.js';
+import { lanAddresses } from './lan/network.js';
+import { loadOrCreateCertificate } from './lan/tls.js';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -185,14 +188,15 @@ async function main(): Promise<void> {
   // Her voice (step 7): Qwen3-TTS in ComfyUI, sharing the GPU gate with the
   // photos (its own client: a long reply takes longer than a photo).
   const voices = v.enabled ? new VoiceStore(v.voicesDir) : undefined;
+  const stt = new SherpaSpeechToText(() => ({
+    modelsDir: v.modelsDir,
+    model: v.sttModel,
+    language: S().sttLanguage,
+    numThreads: v.threads,
+  }));
   const voice: VoiceServices | undefined = voices
     ? {
-        stt: new SherpaSpeechToText(() => ({
-          modelsDir: v.modelsDir,
-          model: v.sttModel,
-          language: S().sttLanguage,
-          numThreads: v.threads,
-        })),
+        stt,
         tts: new SpeechService({
           comfy: new ComfyClient({ baseUrl: img.comfyUrl, timeoutMs: 300_000 }),
           gate: gpu,
@@ -202,6 +206,8 @@ async function main(): Promise<void> {
           cacheDir: v.speechCacheDir,
           log: memoryLog,
           options: () => ({ replyLanguage: language() }),
+          // Writes down what a voice the user records or brings says (step 7b).
+          stt,
         }),
       }
     : undefined;
@@ -210,7 +216,8 @@ async function main(): Promise<void> {
   // memories, reference face, background and voice.
   const characterService = new CharacterService(characters, chat, sessions, memoryStore, faces, backgrounds, voices);
 
-  const app = await buildApp({
+  // Everything both servers share (the PC page and the phone listener).
+  const shared = {
     chat,
     characters,
     llm,
@@ -226,7 +233,28 @@ async function main(): Promise<void> {
     allowedHosts,
     userName: () => S().userName,
     logger: { level: process.env.LOG_LEVEL ?? 'info' },
+  };
+  // Paired phones (step 8): read by the PC's settings even when phone access is off.
+  const devices = new DeviceStore(db);
+  const lanCert = config.lan.enabled ? await loadOrCreateCertificate(config.lan.dir) : undefined;
+
+  const app = await buildApp({
+    ...shared,
+    mode: 'local',
+    devices,
+    lan: lanCert ? { port: config.lan.port, addresses: () => lanAddresses(), fingerprint: lanCert.fingerprint } : null,
   });
+  // The phone listener (step 8): HTTPS with the pinned certificate, private
+  // network only, paired phones only, no web page.
+  const lanApp = lanCert
+    ? await buildApp({
+        ...shared,
+        mode: 'lan',
+        https: { key: lanCert.key, cert: lanCert.cert },
+        devices,
+        allowedHosts: [],
+      })
+    : undefined;
   log = app.log;
 
   // Switching models from the settings: free the old one's VRAM right away.
@@ -321,8 +349,7 @@ async function main(): Promise<void> {
       stopping = true;
       app.log.info(`${signal} received, shutting down`);
       const timeout = new Promise((r) => setTimeout(r, 5000));
-      app
-        .close()
+      Promise.all([app.close(), lanApp?.close()])
         .then(() => Promise.race([memory?.idle(), timeout]))
         .then(() => {
           db.close();
@@ -336,6 +363,17 @@ async function main(): Promise<void> {
 
   await app.listen({ host: config.host, port: config.port });
   app.log.info(`girllm ready on http://${config.host === '::1' ? '[::1]' : config.host}:${config.port}`);
+  if (lanApp && lanCert) {
+    // All interfaces: the guard answers private-network addresses only.
+    await lanApp.listen({ host: '0.0.0.0', port: config.lan.port });
+    const addresses = lanAddresses();
+    app.log.info(
+      `Phone app: on (https://${addresses[0] ?? '<no private address>'}:${config.lan.port}, ` +
+        `${devices.list().length} paired; pair a phone in Settings → Phone). Certificate ${lanCert.fingerprint.slice(0, 16)}…`,
+    );
+  } else {
+    app.log.info('Phone app: off (set LAN_ENABLED=true in .env to use it on your local network)');
+  }
 }
 
 main().catch((err: unknown) => {

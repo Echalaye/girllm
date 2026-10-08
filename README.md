@@ -17,6 +17,15 @@ Nothing leaves your machine: the model runs on your GPU through [Ollama](https:/
 
 ## Features
 
+### On your phone (step 8)
+
+- **An Android app** (Flutter, in [`mobile/`](mobile/README.md)): your characters, the chat with her replies as she
+  writes them, her photos (📷, ↻ retake), 🔊 her voice and "Voice on", and the character editor (card, voice designed
+  or recorded, face and background).
+- **Local network only.** Turn it on with `LAN_ENABLED=true`, then pair the phone by scanning a QR code in ⚙ Settings →
+  _Phone app_. The phone only ever talks to your PC: private addresses only, HTTPS with the PC's own certificate pinned
+  from the QR code, and a token per phone that you can revoke from the PC. No cloud, no relay, no analytics.
+
 ### Her own voice (step 7)
 
 - **A voice made for her.** In the character editor ("Her voice"), describe how she sounds ("woman in her late
@@ -25,6 +34,13 @@ Nothing leaves your machine: the model runs on your GPU through [Ollama](https:/
   her reference, and **every message she speaks is said with that exact voice** (voice cloning), so she always
   sounds like the same person. A character without a voice gets one automatically the first time she speaks, from
   her description or a natural default for her gender.
+- **Or a real voice** (step 7b): **Record a voice** (you read a short text aloud, 10–30 s) or **Use a recording**
+  (WAV, MP3, M4A, OGG… of 4–30 s of clear speech). It must be **your own voice, or that of an adult who agreed** to
+  it being used: the editor asks you to confirm first, and the server refuses a clip sent without that confirmation.
+  The clip is trimmed, its level evened out, and Whisper writes down what it says (the cloning model needs the words);
+  it then becomes the character's voice right away (a designed voice is compared first, then kept; closing the editor
+  with one you didn't keep asks whether to keep the latest). It stays on your PC (`data/voices/`). The section says
+  "His voice" for a male character.
 - **🔊 on each of her messages**: click to hear it. The voice is made on the GPU like her photos (the chat model is
   unloaded for a few seconds, then reloads for the next reply), so a message takes a while to prepare the first
   time (estimated ~10–30 s); replaying it is instant (spoken messages are kept in `data/speech-cache/`, the
@@ -356,6 +372,8 @@ Mistral Nemo-based models (Mistral AI is French) and Qwen models handle French w
 | ------------------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
 | `HOST`                                      | `127.0.0.1`                                       | Keep loopback: the API has **no authentication**                                                                                            |
 | `PORT`                                      | `3210`                                            |                                                                                                                                             |
+| `LAN_ENABLED`                               | `false`                                           | Phone app (step 8): HTTPS listener for paired phones on your local network only                                                             |
+| `LAN_PORT`                                  | `3211`                                            | Its port. Allow Node.js on **Private** networks when Windows Firewall asks                                                                  |
 | `LLM_PROVIDER`                              | `ollama`                                          | `ollama` = native Ollama API (recommended). `openai` = any OpenAI-compatible server (llama.cpp, KoboldCpp, LM Studio)                       |
 | `LLM_BASE_URL`                              | `http://127.0.0.1:11434`                          | Base URL **without** `/v1`                                                                                                                  |
 | `LLM_KEEP_ALIVE`                            | `30m`                                             | How long Ollama keeps the model in VRAM after the last request (`2h`, `-1` = forever)                                                       |
@@ -439,14 +457,33 @@ for every push and pull request. No GPU or model is needed: the LLM, ComfyUI and
 
 ## Security
 
-- Listens on `127.0.0.1` only by default. Exposing it on your LAN prints a warning. For phone access, prefer **Tailscale**
-  over opening a port.
+- Listens on `127.0.0.1` only by default. Exposing it on your LAN prints a warning. For your phone, use the phone
+  listener below instead of changing `HOST`.
+- **Phone listener** (step 8, `LAN_ENABLED=true`, off by default): a second listener on `LAN_PORT` for the
+  [phone app](mobile/README.md) only.
+  - **HTTPS** with a self-signed ECDSA P-256 certificate made on first start (`data/lan/`, private key readable by your
+    account only). Phones pin its SHA-256 from the pairing QR code, so another machine on the Wi-Fi can't
+    impersonate the PC.
+  - Answers **private addresses only** (10/8, 172.16/12, 192.168/16, link-local, loopback): anything else is
+    dropped (`403`).
+  - **Every route needs a phone token** (`Authorization: Bearer`), except pairing. Tokens are 32 random bytes; only
+    their SHA-256 is stored (`devices` table). Remove a phone in Settings → _Phone app_ and its token stops working
+    at once.
+  - **Pairing**: a one-time code inside the QR code, valid 5 minutes, 5 attempts, one at a time; it is only shown
+    on the PC itself (pairing, phone management and app settings routes exist on `127.0.0.1` only).
+  - **No browsers**: requests carrying an `Origin` header are refused, so a website opened on a phone can't call
+    it, and no web page is served on it.
+  - Same validation, limits and safety checks as the PC page: the phone uses the same API.
 - **Host allow-list**: requests whose `Host` header isn't the app's own address are rejected (`421`), which blocks
   DNS-rebinding attacks from malicious websites.
 - **Origin check**: cross-site requests from other websites are rejected (`403`).
 - Strict **CSP** (`default-src 'self'`, no inline scripts). Model output is rendered with `textContent`, never as HTML.
 - Inputs validated with zod. Body limit 64 KB for JSON, messages ≤ 8000 characters, audio ≤ 4 MB, card files
   ≤ 20 MB, face images ≤ 10 MB, voice descriptions ≤ 500 characters.
+- **A real person's voice needs their consent** (step 7b): recording or uploading a voice asks you to confirm it is
+  your own or that of an adult who agreed; the API refuses the clip without that attestation (`428`) and stores
+  when it was given next to the clip. Clips are decoded in the browser and sent as raw PCM (≤ 8 MB, 4–30 s of
+  speech after trimming), and stored as WAV recognised by its bytes, never by the uploaded file's name.
 - **Her voice is always an adult's** (step 7): voice descriptions go through the same minor and young-look checks
   as photos plus child-voice words (EN/FR), designed voices are always described as an adult's, and a card stating
   an age under 18 gets no voice (`422`).
@@ -698,9 +735,11 @@ each reply ─► prompt = character card
    - 6c ✅ FLUX.2 face pass: her small face redrawn from her profile picture in wide and full-body photos
 7. ✅ **Her own voice**: Qwen3-TTS 1.7B in ComfyUI, a voice designed from a description in the editor and cloned for
    every message, 🔊 on each message, used by "Voice on" and calls
+   - 7b ✅ Her voice from a real recording (your own, or a consenting adult's): microphone or file, with consent
+8. ✅ **On your phone**: an Android app (Flutter) for the chat, photos, voice and editor, paired by QR code and limited
+   to your local network (pinned HTTPS certificate, revocable token per phone)
 
 Ideas for later: a LoRA for an even more consistent face (especially for anime characters), emotions in her voice
-(Qwen3-TTS takes an instruction like "whispering" or "laughing"), interrupting her by talking during a call, and
-phone access through Tailscale.
+(Qwen3-TTS takes an instruction like "whispering" or "laughing"), and interrupting her by talking during a call.
 
 Architecture details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).

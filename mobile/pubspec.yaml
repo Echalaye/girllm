@@ -1,0 +1,38 @@
+name: girllm_mobile
+description: girllm on your phone, over your own local network only (step 8).
+publish_to: none
+version: 0.1.0+1
+
+environment:
+  # Works with the current stable Flutter (Dart 3.11). Dependencies are
+  # chosen so none needs a newer Dart (record 7.x needs 3.12: 6.x is used).
+  sdk: '>=3.9.0 <4.0.0'
+
+# Every dependency works fully on the phone: no analytics, no Google services,
+# no network use besides talking to your PC. Versions checked on 2026-10-07.
+dependencies:
+  flutter:
+    sdk: flutter
+  # SHA-256 of the PC's certificate (pinning).
+  crypto: ^3.0.6
+  # The connection (PC addresses, certificate fingerprint, token) in the Android Keystore.
+  flutter_secure_storage: ^11.2.0
+  # QR code scanner on zxing-cpp (no ML Kit: ML Kit sends usage data to Google).
+  # 2.3 or 3.x: same ReaderWidget API, pub picks the newest your Dart supports.
+  flutter_zxing: '>=2.3.0 <4.0.0'
+  # Face upload from the gallery (already pulled in by flutter_zxing).
+  image_picker: ^1.1.2
+  # Plays her voice (FLAC from the PC, written to a temporary file).
+  just_audio: ^0.10.6
+  path_provider: ^2.1.5
+  # Records your voice for her (raw PCM, sent to the PC). 6.2 has the same
+  # API we use (AudioRecorder.startStream, AudioEncoder.pcm16bits) as 7.x.
+  record: ^6.2.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true

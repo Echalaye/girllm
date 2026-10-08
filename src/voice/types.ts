@@ -17,8 +17,18 @@ export interface TextToSpeech {
   status(): Promise<VoiceComponentStatus>;
   /** `text` in the character's voice, as FLAC; undefined when nothing is speakable. */
   speak(characterId: string, text: string, signal?: AbortSignal): Promise<Buffer | undefined>;
+  /** What the user reads aloud when recording a voice for her (chat language). */
+  readAloud(): string;
   /** Design a voice from a description, kept as a candidate. @returns its id. */
   designCandidate(characterId: string, description: string, signal?: AbortSignal): Promise<string>;
+  /**
+   * A real voice (the user's, or a consenting adult's), recorded or uploaded
+   * (step 7b), kept as a candidate. The caller has checked the consent.
+   */
+  customCandidate(
+    characterId: string,
+    clip: { samples: Float32Array; sampleRate: number; source: 'recorded' | 'uploaded'; consentAt: string },
+  ): Promise<{ candidate: string; transcript: string }>;
 }
 
 export interface VoiceComponentStatus {

@@ -4,6 +4,7 @@ export default defineConfig({
   test: {
     pool: 'forks',
     // node:sqlite is built into Node but still flagged "experimental": hide that notice in test output.
-    poolOptions: { forks: { execArgv: ['--disable-warning=ExperimentalWarning'] } },
+    // (Vitest 4+: `execArgv` sits directly under `test`; `poolOptions` was removed.)
+    execArgv: ['--disable-warning=ExperimentalWarning'],
   },
 });

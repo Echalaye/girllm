@@ -321,14 +321,29 @@
                 placeholder="Woman in her late twenties, warm and slightly husky voice, calm, a little playful, speaks softly"
               ></textarea>
               <span id="voice-hint" class="hint"
-                >Age, pitch, texture, mood, pace. Without one, she gets a natural default voice the first time she
-                speaks.</span
+                >Age, pitch, texture, mood, pace. Without a voice, a natural default one is made the first time the
+                character speaks.</span
               >
             </label>
             <div id="voice-current" class="voice-current"><span class="muted small">No voice yet</span></div>
             <div class="face-actions">
               <button id="voice-generate" class="secondary" type="button">Create her voice</button>
               <button id="voice-remove" class="ghost danger" type="button" hidden>Remove</button>
+            </div>
+            <!-- Or a real voice: yours, or that of an adult who agreed (consent asked first). -->
+            <div class="face-actions">
+              <button id="voice-record" class="ghost" type="button">Record a voice</button>
+              <button id="voice-upload" class="ghost" type="button">Use a recording</button>
+              <input id="voice-file" type="file" accept="audio/*" hidden />
+            </div>
+            <div id="voice-recorder" class="voice-recorder" hidden>
+              <p class="small muted">Read this aloud, calmly, close to the microphone (10–30 s):</p>
+              <blockquote id="voice-read-text"></blockquote>
+              <div class="face-actions">
+                <button id="voice-record-stop" class="secondary" type="button">Stop and use it</button>
+                <button id="voice-record-cancel" class="ghost" type="button">Cancel</button>
+                <span id="voice-record-time" class="small muted" aria-live="off"></span>
+              </div>
             </div>
             <ol id="voice-candidates" class="voice-candidates" hidden></ol>
             <p id="voice-status" class="small muted" role="status" aria-live="polite"></p>
@@ -421,13 +436,36 @@
       </form>
     </dialog>
 
+    <!-- Consent before recording or uploading a real person's voice (step 7b). -->
+    <dialog id="voice-consent-dialog" class="panel narrow" aria-labelledby="voice-consent-title">
+      <form method="dialog" class="panel-body">
+        <h2 id="voice-consent-title">Whose voice is it?</h2>
+        <p>
+          This recording becomes the voice she speaks with: every message is said with it. Only use a voice that is:
+        </p>
+        <ul>
+          <li>your own, or</li>
+          <li>that of an adult who agreed to it being used this way.</li>
+        </ul>
+        <p class="small muted">The recording stays on this computer.</p>
+        <label class="check">
+          <input id="voice-consent-check" type="checkbox" required />
+          It is my own voice, or the voice of an adult who agreed to it.
+        </label>
+        <div class="panel-foot">
+          <button value="cancel" class="ghost" type="submit" formnovalidate>Cancel</button>
+          <button value="ok" class="primary" type="submit">Continue</button>
+        </div>
+      </form>
+    </dialog>
+
     <!-- Confirmation for destructive actions. -->
     <dialog id="confirm-dialog" class="panel narrow" aria-labelledby="confirm-title">
       <form method="dialog" class="panel-body">
         <h2 id="confirm-title"></h2>
         <p id="confirm-text"></p>
         <div class="panel-foot">
-          <button value="cancel" class="ghost" type="submit">Cancel</button>
+          <button id="confirm-cancel" value="cancel" class="ghost" type="submit">Cancel</button>
           <button id="confirm-ok" value="ok" class="primary danger-fill" type="submit"></button>
         </div>
       </form>

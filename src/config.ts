@@ -192,6 +192,11 @@ const ConfigSchema = z
     CHAT_BACKGROUND: z.enum(['off', 'subtle', 'clear']).default('subtle'),
     // She writes first after this many minutes of silence (0 = never).
     PROACTIVE_AFTER_MINUTES: z.coerce.number().int().min(0).max(10_080).default(60),
+
+    // Phone app over your local network (step 8): an HTTPS listener for paired
+    // phones only, private addresses only. Off by default.
+    LAN_ENABLED: booleanFlag(false),
+    LAN_PORT: z.coerce.number().int().min(1024).max(65535).default(3211),
   })
   .refine((c) => c.MAX_REPLY_TOKENS < c.CONTEXT_TOKENS / 2, {
     message: 'MAX_REPLY_TOKENS must be less than half of CONTEXT_TOKENS',
@@ -278,6 +283,13 @@ export type AppConfig = Readonly<{
   chatBackground: ChatBackground;
   /** Minutes of silence before she writes first (0 = never). */
   proactiveAfterMinutes: number;
+  /** Phone app over the local network (step 8). */
+  lan: Readonly<{
+    enabled: boolean;
+    port: number;
+    /** DATA_DIR/lan: the TLS key and certificate of the phone listener. */
+    dir: string;
+  }>;
   voice: Readonly<{
     enabled: boolean;
     modelsDir: string;
@@ -371,6 +383,7 @@ export function parseConfig(env: NodeJS.ProcessEnv): AppConfig {
     }),
     chatBackground: c.CHAT_BACKGROUND,
     proactiveAfterMinutes: c.PROACTIVE_AFTER_MINUTES,
+    lan: Object.freeze({ enabled: c.LAN_ENABLED, port: c.LAN_PORT, dir: join(c.DATA_DIR, 'lan') }),
     voice: Object.freeze({
       enabled: c.VOICE_ENABLED,
       modelsDir: c.MODELS_DIR,

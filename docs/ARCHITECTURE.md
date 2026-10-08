@@ -87,6 +87,12 @@ public/voice.js (🔊, playback queue) ──► /api/tts ──► voice/speech
 | `src/voice/voiceStore.ts`                             | Each character's reference clip + transcript (`data/voices`), editor candidates (1 h), atomic writes, validated ids                         |
 | `src/voice/voiceSafety.ts`                            | Adult voices only: minor / young-look / child-voice words, card age check, "adult" prefix                                                   |
 | `src/http/clientAbort.ts`                             | Cancels a long GPU request (photo, voice) when the browser disconnects                                                                      |
+| `src/lan/tls.ts`                                      | Step 8: self-signed ECDSA P-256 certificate (hand-built DER), SHA-256 fingerprint, `data/lan/`                                              |
+| `src/lan/network.ts`                                  | Private-address check (IPv4/IPv6) and this PC's private IPv4 addresses for the QR code                                                      |
+| `src/lan/devices.ts`                                  | `DeviceStore`: one-time pairing code (5 min, 5 tries), phone tokens (SHA-256 only), revoke                                                  |
+| `src/lan/lanAccess.ts`                                | PC-only pairing/phone routes (QR SVG); phone listener guard (private address, no Origin, bearer)                                            |
+| `public/phone.js`                                     | Settings → _Phone app_: QR code with countdown, paired phones, Remove                                                                       |
+| `mobile/`                                             | Android app (Flutter): pinned HTTPS client, QR pairing, chat, photos, voice, editor ([README](../mobile/README.md))                         |
 | `scripts/setupVoice.ts`                               | `npm run setup:voice`: Whisper (download, checksum, atomic extract) and Qwen3-TTS into ComfyUI                                              |
 | `scripts/comfySetupLib.ts`                            | Shared by the setups: node pack at a pinned commit, verified model files, missing Python packages at exact versions                         |
 | `public/voice.js`                                     | `Recorder` (mic → 16 kHz mono float32) and `Speaker` (ordered playback, per-message progress, preparing/playing state, `whenIdle()`)        |
@@ -136,7 +142,7 @@ logged, never shown to the user.
 If the embedding backend is down, memories are stored without a vector and retrieval falls back to recency. The
 chat keeps working, with a warning logged at most once a minute.
 
-## Database schema (v4)
+## Database schema (v5)
 
 | Table                    | Key columns                                                                                                                                                                                     |
 | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -147,6 +153,7 @@ chat keeps working, with a warning logged at most once a minute.
 | `messages.kind` (v4)     | `NULL` = a reply; `opening` / `nudge` = a message she wrote first (prevents two nudges in a row; "rewrite" keeps the kind)                                                                      |
 | `settings` (v3)          | `key`, `value` (JSON), `updated_at`: only the values changed from the app; absent = `.env` default                                                                                              |
 | `memories`               | `id`, `character_id`, `category` (`user`/`character`/`relationship`/`event`), `content`, `embedding` (float32 BLOB, L2-normalised), `embedding_model`, `source_session_id` → set NULL on delete |
+| `devices` (v5)           | `id` (UUID), `name`, `token_hash` (SHA-256 hex, unique), `created_at`, `last_seen_at`: paired phones (step 8)                                                                                   |
 
 Vectors are only compared with vectors from the same `embedding_model`, so changing the model never mixes
 incompatible spaces. Old memories then rank by recency until they are re-learned.
@@ -164,51 +171,57 @@ incompatible spaces. Old memories then rank by recency until they are re-learned
 
 ## HTTP API
 
-| Method | Path                                        | Body                                                                            | Response                                                                      |
-| ------ | ------------------------------------------- | ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| GET    | `/api/health`                               | —                                                                               | `{ status, llm: { ok, models?, error? } }`                                    |
-| GET    | `/api/config`                               | —                                                                               | `{ userName, memoryEnabled }`                                                 |
-| GET    | `/api/characters`                           | —                                                                               | `[{ id, name, creatorNotes, tags, style, hasFace }]`                          |
-| GET    | `/api/characters/:id/sessions`              | —                                                                               | `[{ id, title, createdAt, updatedAt, messageCount }]` (newest first)          |
-| POST   | `/api/sessions`                             | `{ characterId }`                                                               | `201 { session, character }`                                                  |
-| GET    | `/api/sessions/:id`                         | —                                                                               | `{ session (with summary, mood), character }`                                 |
-| DELETE | `/api/sessions/:id`                         | —                                                                               | `204` (memories are kept)                                                     |
-| POST   | `/api/sessions/:id/messages`                | `{ text }` (1–8000 chars)                                                       | SSE stream                                                                    |
-| POST   | `/api/sessions/:id/regenerate`              | —                                                                               | SSE stream                                                                    |
-| GET    | `/api/characters/:id/memories`              | —                                                                               | `[{ id, category, content, createdAt, updatedAt }]`                           |
-| POST   | `/api/characters/:id/memories`              | `{ category, content }` (3–300 chars)                                           | `201`, or `409` if it duplicates an existing memory                           |
-| DELETE | `/api/memories/:id`                         | —                                                                               | `204`                                                                         |
-| GET    | `/api/images/status`                        | —                                                                               | `{ available, checkpoint?, reason? }`                                         |
-| POST   | `/api/sessions/:id/photo`                   | `{ request? }` (≤ 300 chars)                                                    | `{ message }` with `imageId` (20–60 s; cancelled if the client disconnects)   |
-| POST   | `/api/sessions/:id/images/:imageId/retake`  | —                                                                               | `{ message }` with its new `imageId` (same scene, new seed; old one deleted)  |
-| GET    | `/api/images/:id`                           | —                                                                               | `image/png`                                                                   |
-| GET    | `/api/voice`                                | —                                                                               | `{ stt: { available, model, reason? }, tts: {…} }` (tts checks ComfyUI)       |
-| POST   | `/api/stt`                                  | `application/octet-stream`: float32 LE mono 16 kHz, ≤ 4 MB (~60 s)              | `{ text }` (empty if under 0.3 s)                                             |
-| POST   | `/api/tts`                                  | `{ text, characterId }` (text 1–6000 chars, spoken up to 1500)                  | `audio/flac` in her voice, or `204` if nothing is speakable                   |
-| GET    | `/api/settings`                             | —                                                                               | `{ values, defaults, overridden, options: { models, checkpoints, presets } }` |
-| PUT    | `/api/settings`                             | partial settings (unknown keys refused)                                         | `{ values, defaults, overridden }`                                            |
-| POST   | `/api/settings/reset`                       | `{ keys? }`                                                                     | same; back to `.env` (all, or the listed keys)                                |
-| POST   | `/api/characters`                           | card fields (`name` required, `style`, `appearance`…)                           | `201` summary; `422` if she isn't an adult                                    |
-| GET    | `/api/characters/:id`                       | —                                                                               | summary + `card` (editable fields) + `voice` (`{ description, createdAt }`)   |
-| PUT    | `/api/characters/:id`                       | card fields                                                                     | summary (the id never changes)                                                |
-| DELETE | `/api/characters/:id`                       | —                                                                               | `{ deleted, chats, memories }` (cascade); `409` while generating              |
-| POST   | `/api/characters/import`                    | `application/octet-stream`: `.json` or `.png` card, ≤ 20 MB                     | `201` summary                                                                 |
-| GET    | `/api/characters/:id/export`                | —                                                                               | Character Card V2 JSON (download)                                             |
-| GET    | `/api/characters/:id/face`                  | —                                                                               | `image/png` or `image/jpeg`                                                   |
-| PUT    | `/api/characters/:id/face`                  | octet-stream PNG/JPEG ≤ 10 MB + header `x-girllm-consent: adult-and-consenting` | `204`; `428` without the consent header                                       |
-| DELETE | `/api/characters/:id/face`                  | —                                                                               | `204`                                                                         |
-| POST   | `/api/characters/:id/face/candidates`       | — (uses the saved appearance)                                                   | `{ candidates: [uuid ×4] }` (cancelled if the client disconnects)             |
-| GET    | `/api/characters/:id/face/candidates/:cid`  | —                                                                               | `image/png` (kept 1 h)                                                        |
-| POST   | `/api/characters/:id/face/candidates/:cid`  | —                                                                               | `204`: the candidate becomes her face                                         |
-| GET    | `/api/characters/:id/voice`                 | —                                                                               | `audio/flac`: her reference clip; `404` before she has one                    |
-| DELETE | `/api/characters/:id/voice`                 | —                                                                               | `204` (a new voice is made the next time she speaks)                          |
-| POST   | `/api/characters/:id/voice/candidates`      | `{ description }` (1–500 chars)                                                 | `{ candidate: uuid }` (GPU; cancelled if the client disconnects)              |
-| GET    | `/api/characters/:id/voice/candidates/:cid` | —                                                                               | `audio/flac` (kept 1 h)                                                       |
-| POST   | `/api/characters/:id/voice/candidates/:cid` | —                                                                               | `204`: the candidate becomes her voice                                        |
+| Method | Path                                        | Body                                                                                                                            | Response                                                                      |
+| ------ | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| GET    | `/api/health`                               | —                                                                                                                               | `{ status, llm: { ok, models?, error? } }`                                    |
+| GET    | `/api/config`                               | —                                                                                                                               | `{ userName, memoryEnabled }`                                                 |
+| GET    | `/api/characters`                           | —                                                                                                                               | `[{ id, name, creatorNotes, tags, style, hasFace }]`                          |
+| GET    | `/api/characters/:id/sessions`              | —                                                                                                                               | `[{ id, title, createdAt, updatedAt, messageCount }]` (newest first)          |
+| POST   | `/api/sessions`                             | `{ characterId }`                                                                                                               | `201 { session, character }`                                                  |
+| GET    | `/api/sessions/:id`                         | —                                                                                                                               | `{ session (with summary, mood), character }`                                 |
+| DELETE | `/api/sessions/:id`                         | —                                                                                                                               | `204` (memories are kept)                                                     |
+| POST   | `/api/sessions/:id/messages`                | `{ text }` (1–8000 chars)                                                                                                       | SSE stream                                                                    |
+| POST   | `/api/sessions/:id/regenerate`              | —                                                                                                                               | SSE stream                                                                    |
+| GET    | `/api/characters/:id/memories`              | —                                                                                                                               | `[{ id, category, content, createdAt, updatedAt }]`                           |
+| POST   | `/api/characters/:id/memories`              | `{ category, content }` (3–300 chars)                                                                                           | `201`, or `409` if it duplicates an existing memory                           |
+| DELETE | `/api/memories/:id`                         | —                                                                                                                               | `204`                                                                         |
+| GET    | `/api/images/status`                        | —                                                                                                                               | `{ available, checkpoint?, reason? }`                                         |
+| POST   | `/api/sessions/:id/photo`                   | `{ request? }` (≤ 300 chars)                                                                                                    | `{ message }` with `imageId` (20–60 s; cancelled if the client disconnects)   |
+| POST   | `/api/sessions/:id/images/:imageId/retake`  | —                                                                                                                               | `{ message }` with its new `imageId` (same scene, new seed; old one deleted)  |
+| GET    | `/api/images/:id`                           | —                                                                                                                               | `image/png`                                                                   |
+| GET    | `/api/voice`                                | —                                                                                                                               | `{ stt: { available, model, reason? }, tts: {…} }` (tts checks ComfyUI)       |
+| POST   | `/api/stt`                                  | `application/octet-stream`: float32 LE mono 16 kHz, ≤ 4 MB (~60 s)                                                              | `{ text }` (empty if under 0.3 s)                                             |
+| POST   | `/api/tts`                                  | `{ text, characterId }` (text 1–6000 chars, spoken up to 1500)                                                                  | `audio/flac` in her voice, or `204` if nothing is speakable                   |
+| GET    | `/api/settings`                             | —                                                                                                                               | `{ values, defaults, overridden, options: { models, checkpoints, presets } }` |
+| PUT    | `/api/settings`                             | partial settings (unknown keys refused)                                                                                         | `{ values, defaults, overridden }`                                            |
+| POST   | `/api/settings/reset`                       | `{ keys? }`                                                                                                                     | same; back to `.env` (all, or the listed keys)                                |
+| POST   | `/api/characters`                           | card fields (`name` required, `style`, `appearance`…)                                                                           | `201` summary; `422` if she isn't an adult                                    |
+| GET    | `/api/characters/:id`                       | —                                                                                                                               | summary + `card` (editable fields) + `voice` (`{ description, createdAt }`)   |
+| PUT    | `/api/characters/:id`                       | card fields                                                                                                                     | summary (the id never changes)                                                |
+| DELETE | `/api/characters/:id`                       | —                                                                                                                               | `{ deleted, chats, memories }` (cascade); `409` while generating              |
+| POST   | `/api/characters/import`                    | `application/octet-stream`: `.json` or `.png` card, ≤ 20 MB                                                                     | `201` summary                                                                 |
+| GET    | `/api/characters/:id/export`                | —                                                                                                                               | Character Card V2 JSON (download)                                             |
+| GET    | `/api/characters/:id/face`                  | —                                                                                                                               | `image/png` or `image/jpeg`                                                   |
+| PUT    | `/api/characters/:id/face`                  | octet-stream PNG/JPEG ≤ 10 MB + header `x-girllm-consent: adult-and-consenting`                                                 | `204`; `428` without the consent header                                       |
+| DELETE | `/api/characters/:id/face`                  | —                                                                                                                               | `204`                                                                         |
+| POST   | `/api/characters/:id/face/candidates`       | — (uses the saved appearance)                                                                                                   | `{ candidates: [uuid ×4] }` (cancelled if the client disconnects)             |
+| GET    | `/api/characters/:id/face/candidates/:cid`  | —                                                                                                                               | `image/png` (kept 1 h)                                                        |
+| POST   | `/api/characters/:id/face/candidates/:cid`  | —                                                                                                                               | `204`: the candidate becomes her face                                         |
+| GET    | `/api/characters/:id/voice`                 | —                                                                                                                               | `audio/flac`: her reference clip; `404` before she has one                    |
+| DELETE | `/api/characters/:id/voice`                 | —                                                                                                                               | `204` (a new voice is made the next time she speaks)                          |
+| POST   | `/api/characters/:id/voice/candidates`      | `{ description }` (1–500 chars)                                                                                                 | `{ candidate: uuid }` (GPU; cancelled if the client disconnects)              |
+| GET    | `/api/characters/:id/voice/candidates/:cid` | —                                                                                                                               | `audio/flac` (kept 1 h)                                                       |
+| POST   | `/api/characters/:id/voice/candidates/:cid` | —                                                                                                                               | `204`: the candidate becomes her voice                                        |
+| PUT    | `/api/characters/:id/voice/candidates`      | float32 LE mono PCM, `?rate=24000&source=recorded\|uploaded` + header `x-girllm-consent: own-voice-or-consenting-adult`, ≤ 8 MB | `{ candidate, transcript }` (WAV); `428` without consent; `422` unusable clip |
+| GET    | `/api/lan`                                  | —                                                                                                                               | `{ enabled, port, addresses, fingerprint, devices[] }` (PC only)              |
+| POST   | `/api/lan/pairing`                          | —                                                                                                                               | `{ payload, svg, expiresAt, addresses, port }`: new QR code (PC only)         |
+| DELETE | `/api/lan/pairing`                          | —                                                                                                                               | `204` (PC only)                                                               |
+| DELETE | `/api/lan/devices/:id`                      | —                                                                                                                               | `204`: the phone's token stops working (PC only)                              |
+| POST   | `/api/pair`                                 | `{ code, name }` (phone listener only, no token)                                                                                | `{ token, device }`; `403` wrong/expired code                                 |
 
 Error statuses: `400` invalid input · `403` cross-origin · `404` not found · `409` already generating or duplicate ·
 `413` prompt or upload too large · `415` wrong content type · `421` wrong Host · `422` photo, voice or character
-refused (safety) · `428` face upload without consent ·
+refused (safety) · `428` face upload without consent · `401` phone token missing or revoked ·
 `502` LLM backend or ComfyUI error · `503` voice/photos not installed or disabled.
 
 ## Tooling
@@ -328,6 +341,71 @@ every 30 s otherwise). `speakMessage` stops what's playing and enqueues the mess
 button shows loading / playing; a second click stops. "Voice on", photos and calls call it once the reply is done.
 `Speaker` aborts the pending `/api/tts` fetch on `stop()` (the server then cancels the ComfyUI job), reports
 `preparing`/`playing` (presence "recording a voice message…", call screen "about to answer…" / "talking").
+
+## Step 7b: a real voice (recorded or uploaded)
+
+**Page** (`editor.js`): "Record a voice" / "Use a recording" open the "Whose voice is it?" dialog first (own voice
+or a consenting adult's). Recording: `Recorder` (voice.js) with a 35 s cap while the user reads
+`/api/voice.readAloud` (`readAloudText(language)`); a file (≤ 20 MB) is decoded by the browser
+(`decodeToMono`, any format it reads). Both are resampled to 24 kHz mono and sent as raw float32 with the consent
+header. The returned candidate is promoted at once (a real voice is a deliberate choice: nothing to compare);
+designed candidates stay in the list, and closing the editor with one never kept asks whether to keep the latest
+(`#offerUnkeptVoice`), so a character doesn't silently get the automatic default voice instead.
+
+**Server.** The route checks the header (`428`), `rate`/`source` (zod), the float32 length.
+`SpeechService.customCandidate`: card age check, allowed rate, ≤ 40 s raw, `trimSilence` (5 % of the clip's peak,
+0.15 s padding), 4–30 s of speech and RMS ≥ 0.005 (else `VoiceClipError` 422 with the reason), `peakNormalize` to
+−1 dBFS, Whisper on a 16 kHz copy (`resampleLinear`) → `cleanTranscript` (empty or a hallucination → 422),
+`encodeWav16`, `VoiceStore.addCandidate` with `source` and `consentAt`. The store recognises FLAC/WAV by their
+first bytes, serves them with the matching type, and keeps one clip per character whatever its format. Cloning
+uploads the WAV as `girllm_voice_<id>_<hash16>.wav` (`audio/wav`).
+
+## Step 8: the phone app on your local network
+
+**Two listeners, one API.** `index.ts` builds the Fastify app twice from the same services (`shared` deps):
+the PC page on `HOST:PORT` (`mode: 'local'`, unchanged) and, with `LAN_ENABLED=true`, the phone listener on
+`0.0.0.0:LAN_PORT` (`mode: 'lan'`). In `lan` mode `app.ts` serves HTTPS with the PC's certificate, skips the
+static files, the Host allow-list (phones use the IP) and the PC-only routes (`/api/settings`, `/api/lan*`), and
+installs `guardLanListener` first:
+
+```
+onRequest ─► remote address private? (isPrivateAddress)          no → 403
+          ─► Origin header?                                       yes → 403 (no browser can call it)
+          ─► POST /api/pair ?  → DeviceStore.pair(code, name)     → { token } / 403
+          ─► Bearer token → DeviceStore.authenticate(sha256)      none/revoked → 401
+          ─► the usual routes (same zod validation, limits, safety checks)
+```
+
+**Certificate** (`tls.ts`). Made once with `generateKeyPairSync('ec', P-256)` and a minimal hand-written X.509
+v3 DER (subject = issuer `CN=girllm (local network)`, 10 years, starting 1 h early to tolerate a slow phone
+clock, ECDSA-SHA256, random positive serial), stored in `data/lan/key.pem` (mode 0600) and `cert.pem`; made again
+once expired. No dependency, and no hostname or SAN needed: phones don't check it against CAs or names, they pin
+`sha256(DER)`. Deleting `data/lan` makes a new one; paired phones then refuse the PC and must pair again.
+
+**Pairing** (`devices.ts`). Settings → _Phone app_ → `POST /api/lan/pairing` makes a one-time code (120 bits,
+base32, 5 minutes, 5 attempts, a new code replaces the old) and returns the QR code as SVG (`qrcode`, rendered as
+an `<img>` data URL: no inline script for the CSP):
+`girllm://pair?v=1&a=<ip>,<ip>&p=<port>&c=<code>&f=<sha256 hex>`. The phone posts the code to `/api/pair`; the
+PC answers a random 32-byte token (base64url) and stores only its SHA-256, so a stolen database can't be used to
+connect. The page polls `/api/lan` every 2.5 s to show the new phone.
+
+**The app** (`mobile/`, Flutter, Android). `PinnedClient` uses `dart:io` `HttpClient` with an empty
+`SecurityContext` (no system CAs), `badCertificateCallback` = `sha256(cert.der) == fingerprint`, and
+`findProxy = DIRECT` (no proxy can see or redirect the traffic). Only private IPv4 addresses from the QR code are
+accepted; it tries each until one answers and remembers it first. The connection (addresses, port,
+fingerprint, token) is in flutter_secure_storage (Android Keystore); `allowBackup=false` and data-extraction
+rules keep it out of backups. Replies stream over SSE (`SseParser`), photos and pictures go through an in-memory
+LRU (`PictureCache`, 3 downloads at a time, decoded at display size; a failed picture says why and retries on tap), her voice (FLAC) through a temporary file played by just_audio. The editor keeps the whole
+card it loaded and sends it back, so fields the phone doesn't show (lorebook) are preserved. A recorded voice is
+16-bit PCM at 24 kHz from `record`, converted to float32 (`pcm16ToFloat32Le`) and sent with the same consent
+header as the page, then kept at once; faces come from Android's photo picker (no storage permission) with the
+same consent header. The QR scanner is zxing-cpp (`flutter_zxing`), not ML Kit, which reports usage to Google. The scanner decodes the whole
+centred square every 150 ms with `tryHarder` (a code on a screen); the PC draws it with low error correction and
+the standard margin so its modules stay big. The shared services (`ServicesScope`) sit above `MaterialApp`
+(`GirllmShell`), because pushed screens are siblings of `home` in the navigator and wouldn't see a scope placed
+around it; `test/navigation_test.dart` guards this. Her picture behind the chat follows the PC rules
+(`/api/config.chatBackground` off / subtle / clear; the character's `background`: latest photo, scene, then
+face), blurred and dimmed like the page.
 
 ## Step 4d flows
 

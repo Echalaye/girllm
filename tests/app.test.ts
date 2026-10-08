@@ -24,6 +24,8 @@ const fakeVoice = {
       return text.startsWith('*') ? undefined : Buffer.from('fLaC fake');
     },
     designCandidate: async () => 'candidate',
+    customCandidate: async () => ({ candidate: 'candidate', transcript: 'Bonjour' }),
+    readAloud: () => 'Lis ceci.',
   },
 };
 
