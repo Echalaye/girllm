@@ -4,6 +4,8 @@
 library;
 
 import 'dart:async';
+import 'dart:typed_data';
+import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 
@@ -39,6 +41,13 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _speaks = false;
   bool _photos = false;
 
+  /// Her picture behind the chat, as set on the PC: 'off', 'subtle', 'clear'.
+  String _look = 'off';
+
+  /// Background pictures are fetched again each time the chat is opened
+  /// (she may have a new scene since).
+  final int _openedAt = DateTime.now().millisecondsSinceEpoch;
+
   CharacterSummary get _character => widget.character;
   String get _she => _character.isMale ? 'He' : 'She';
 
@@ -70,11 +79,13 @@ class _ChatScreenState extends State<ChatScreen> {
       final session = sessions.isEmpty ? await api.createSession(_character.id) : await api.session(sessions.first.id);
       final voice = await api.voiceStatus().catchError((Object _) => const VoiceStatus(speaks: false, reason: '', readAloud: ''));
       final photos = await api.photosAvailable().catchError((Object _) => false);
+      final look = await api.chatBackground().catchError((Object _) => 'subtle');
       if (!mounted) return;
       setState(() {
         _open(session);
         _speaks = voice.speaks;
         _photos = photos;
+        _look = look;
       });
     } on Object catch (e) {
       if (mounted) setState(() => _error = e.toString());
@@ -291,6 +302,27 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  // ---- Her picture behind the chat (same rules as the PC page) ---------------
+
+  /// "latest": her latest photo in this chat, else her scene, else her face;
+  /// "scene": her scene, else her face. null: nothing behind the chat.
+  _BackdropSource? _backdrop() {
+    if (_look == 'off' || _session == null) return null;
+    final c = _character;
+    final api = _services.api;
+    if (c.background == 'latest') {
+      for (final m in _messages.reversed) {
+        final imageId = m.imageId;
+        if (imageId != null) return (key: 'img:$imageId', load: () => api.image(imageId));
+      }
+    }
+    if (c.hasBackground) {
+      return (key: 'bg:${c.id}:$_openedAt', load: () => api.picture(c.id, 'background'));
+    }
+    if (c.hasFace) return (key: 'face:${c.id}:$_openedAt', load: () => api.picture(c.id, 'face'));
+    return null;
+  }
+
   // ---- UI -----------------------------------------------------------------------
 
   @override
@@ -336,41 +368,46 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
         ],
       ),
-      body: Column(
+      body: Stack(
         children: [
-          Expanded(child: _body()),
-          SafeArea(
-            top: false,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _input,
-                      minLines: 1,
-                      maxLines: 5,
-                      maxLength: 8000,
-                      textCapitalization: TextCapitalization.sentences,
-                      decoration: InputDecoration(
-                        hintText: 'Message ${_character.name}…',
-                        counterText: '',
-                        isDense: true,
+          if (_backdrop() case final source?) Positioned.fill(child: _Backdrop(source: source, look: _look)),
+          Column(
+            children: [
+              Expanded(child: _body()),
+              SafeArea(
+                top: false,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _input,
+                          minLines: 1,
+                          maxLines: 5,
+                          maxLength: 8000,
+                          textCapitalization: TextCapitalization.sentences,
+                          decoration: InputDecoration(
+                            hintText: 'Message ${_character.name}…',
+                            counterText: '',
+                            isDense: true,
+                          ),
+                          onSubmitted: (_) => _send(),
+                        ),
                       ),
-                      onSubmitted: (_) => _send(),
-                    ),
+                      const SizedBox(width: 8),
+                      busy
+                          ? IconButton.filledTonal(
+                              tooltip: 'Stop',
+                              icon: const Icon(Icons.stop),
+                              onPressed: () => _running?.cancel(),
+                            )
+                          : IconButton.filled(tooltip: 'Send', icon: const Icon(Icons.send), onPressed: _send),
+                    ],
                   ),
-                  const SizedBox(width: 8),
-                  busy
-                      ? IconButton.filledTonal(
-                          tooltip: 'Stop',
-                          icon: const Icon(Icons.stop),
-                          onPressed: () => _running?.cancel(),
-                        )
-                      : IconButton.filled(tooltip: 'Send', icon: const Icon(Icons.send), onPressed: _send),
-                ],
+                ),
               ),
-            ),
+            ],
           ),
         ],
       ),
@@ -501,17 +538,22 @@ class _SpeakButton extends StatelessWidget {
 class _Photo extends StatelessWidget {
   const _Photo({required this.imageId, required this.onRetake});
 
+  /// Width of a photo in its bubble (the bubble is 82 % of the screen).
+  static double bubbleWidth(BuildContext context) => MediaQuery.sizeOf(context).width * 0.82;
+
   final String imageId;
   final VoidCallback? onRetake;
 
   @override
   Widget build(BuildContext context) {
     final services = ServicesScope.of(context);
-    Widget image() => RemoteImage(
+    // In the bubble: decoded at bubble size; full screen: at full size.
+    Widget image({double? decodeWidth}) => RemoteImage(
           cacheKey: 'img:$imageId',
           cache: services.pictures,
           load: () => services.api.image(imageId),
           fit: BoxFit.contain,
+          decodeWidth: decodeWidth,
           semanticLabel: 'Photo',
           placeholder: const SizedBox(height: 240, child: Center(child: CircularProgressIndicator(strokeWidth: 2))),
         );
@@ -529,7 +571,10 @@ class _Photo extends StatelessWidget {
                 ),
               ),
             ),
-            child: ClipRRect(borderRadius: BorderRadius.circular(14), child: image()),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(14),
+              child: image(decodeWidth: bubbleWidth(context)),
+            ),
           ),
           if (onRetake != null)
             Positioned(
@@ -542,6 +587,66 @@ class _Photo extends StatelessWidget {
               ),
             ),
         ],
+      ),
+    );
+  }
+}
+
+/// A picture behind the chat: the key caches it, the loader fetches it.
+typedef _BackdropSource = ({String key, Future<Uint8List?> Function() load});
+
+/// Her picture behind the chat, dimmed so the text keeps its contrast
+/// (like the PC page): "subtle" = blurred, "clear" = sharp but darker.
+class _Backdrop extends StatelessWidget {
+  const _Backdrop({required this.source, required this.look});
+
+  final _BackdropSource source;
+  final String look;
+
+  @override
+  Widget build(BuildContext context) {
+    final services = ServicesScope.of(context);
+    final width = MediaQuery.sizeOf(context).width;
+    final subtle = look != 'clear';
+    Widget picture = RemoteImage(
+      cacheKey: source.key,
+      cache: services.pictures,
+      load: source.load,
+      fit: BoxFit.cover,
+      // Blurred anyway: a third of the width is plenty, and much lighter.
+      decodeWidth: subtle ? width / 3 : width,
+      showError: false, // no picture: the plain background
+      placeholder: const SizedBox.shrink(),
+    );
+    if (subtle) {
+      picture = ImageFiltered(
+        imageFilter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+        // Slightly larger: hides the blurred edges.
+        child: Transform.scale(scale: 1.06, child: picture),
+      );
+    }
+    const night = GirllmColors.night;
+    return IgnorePointer(
+      child: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 600),
+        child: Stack(
+          key: ValueKey(source.key),
+          fit: StackFit.expand,
+          children: [
+            picture,
+            DecoratedBox(
+              decoration: subtle
+                  ? BoxDecoration(color: night.withValues(alpha: 0.62))
+                  : BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [night.withValues(alpha: 0.55), night.withValues(alpha: 0.75)],
+                      ),
+                    ),
+            ),
+          ],
+        ),
       ),
     );
   }

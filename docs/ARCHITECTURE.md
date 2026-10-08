@@ -395,11 +395,17 @@ connect. The page polls `/api/lan` every 2.5 s to show the new phone.
 accepted; it tries each until one answers and remembers it first. The connection (addresses, port,
 fingerprint, token) is in flutter_secure_storage (Android Keystore); `allowBackup=false` and data-extraction
 rules keep it out of backups. Replies stream over SSE (`SseParser`), photos and pictures go through an in-memory
-LRU (`PictureCache`), her voice (FLAC) through a temporary file played by just_audio. The editor keeps the whole
+LRU (`PictureCache`, 3 downloads at a time, decoded at display size; a failed picture says why and retries on tap), her voice (FLAC) through a temporary file played by just_audio. The editor keeps the whole
 card it loaded and sends it back, so fields the phone doesn't show (lorebook) are preserved. A recorded voice is
 16-bit PCM at 24 kHz from `record`, converted to float32 (`pcm16ToFloat32Le`) and sent with the same consent
 header as the page, then kept at once; faces come from Android's photo picker (no storage permission) with the
-same consent header. The QR scanner is zxing-cpp (`flutter_zxing`), not ML Kit, which reports usage to Google.
+same consent header. The QR scanner is zxing-cpp (`flutter_zxing`), not ML Kit, which reports usage to Google. The scanner decodes the whole
+centred square every 150 ms with `tryHarder` (a code on a screen); the PC draws it with low error correction and
+the standard margin so its modules stay big. The shared services (`ServicesScope`) sit above `MaterialApp`
+(`GirllmShell`), because pushed screens are siblings of `home` in the navigator and wouldn't see a scope placed
+around it; `test/navigation_test.dart` guards this. Her picture behind the chat follows the PC rules
+(`/api/config.chatBackground` off / subtle / clear; the character's `background`: latest photo, scene, then
+face), blurred and dimmed like the page.
 
 ## Step 4d flows
 

@@ -46,6 +46,14 @@ class GirllmApi {
     return client.address;
   }
 
+  /// How her picture is shown behind the chat (a PC setting): 'off',
+  /// 'subtle' (blurred) or 'clear'.
+  Future<String> chatBackground() async {
+    final config = await client.json('GET', '/api/config') as Map<String, dynamic>;
+    final look = config['chatBackground'];
+    return look is String ? look : 'subtle';
+  }
+
   // ---- Characters -------------------------------------------------------------
 
   Future<List<CharacterSummary>> characters() async {

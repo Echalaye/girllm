@@ -66,7 +66,9 @@ export function registerLanAdminRoutes(
     }
     const { code, expiresAt } = devices.createPairingCode();
     const payload = pairingPayload({ addresses, port: lan.port, code, fingerprint: lan.fingerprint });
-    const svg = await QRCode.toString(payload, { type: 'svg', errorCorrectionLevel: 'M', margin: 2 });
+    // Easy to scan from a screen: low error correction = fewer, bigger modules
+    // (a screen doesn't get dirty or torn), and the standard 4-module margin.
+    const svg = await QRCode.toString(payload, { type: 'svg', errorCorrectionLevel: 'L', margin: 4 });
     return { payload, svg, expiresAt: expiresAt.toISOString(), addresses, port: lan.port };
   });
 

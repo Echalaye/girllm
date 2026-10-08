@@ -605,6 +605,9 @@ class _EditorScreenState extends State<EditorScreen> {
                 cache: pictures,
                 load: () => _services.api.picture(id, kind),
                 semanticLabel: title,
+                decodeWidth: 120,
+                // No picture yet is normal here: show the empty frame.
+                showError: false,
                 placeholder: Container(
                   color: GirllmColors.dusk2,
                   child: const Center(child: Icon(Icons.image_not_supported_outlined)),
@@ -657,6 +660,7 @@ class _EditorScreenState extends State<EditorScreen> {
                       cacheKey: 'cand:$kind:$c',
                       cache: pictures,
                       load: () => _services.api.pictureCandidate(id, kind, c),
+                      decodeWidth: 100,
                     ),
                   ),
                 ),

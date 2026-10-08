@@ -61,7 +61,21 @@ class _PairScreenState extends State<PairScreen> {
       body: _scanning
           ? Stack(
               children: [
-                ReaderWidget(onScan: _onScan, codeFormat: Format.qrCode),
+                ReaderWidget(
+                  onScan: _onScan,
+                  codeFormat: Format.qrCode,
+                  // A QR code on a PC screen (moiré, glare, slight blur) needs
+                  // the thorough decoder; it's one small code, so it stays fast.
+                  tryHarder: true,
+                  // Try again quickly: the default waits 1 s after each miss.
+                  scanDelay: const Duration(milliseconds: 150),
+                  // Scan the largest centred square (default: half of it),
+                  // so the code doesn't have to fit a small target.
+                  cropPercent: 0.9,
+                  // Pairing is by camera or by a photo of the code (gallery
+                  // button), nothing else.
+                  showToggleCamera: false,
+                ),
                 Positioned(
                   left: 16,
                   right: 16,
@@ -81,7 +95,8 @@ class _PairScreenState extends State<PairScreen> {
                 const Text(
                   '1. On your PC, open girllm → Settings → Phone app → "Pair a phone".\n'
                   '2. Make sure this phone is on the same Wi-Fi as the PC.\n'
-                  '3. Scan the QR code shown on the PC.',
+                  '3. Scan the QR code shown on the PC (fill most of the frame with it), or take a '
+                  'photo of it and pick it with the gallery button.',
                 ),
                 const SizedBox(height: 12),
                 Text(

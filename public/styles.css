@@ -1261,7 +1261,7 @@ dialog.editor {
   justify-items: start;
 }
 .pairing-qr img {
-  width: min(16rem, 100%);
+  width: min(20rem, 100%); /* big enough to scan from arm's length */
   aspect-ratio: 1;
   background: #fff; /* a QR code needs a light background in both themes */
   border-radius: 8px;

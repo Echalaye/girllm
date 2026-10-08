@@ -1,7 +1,8 @@
 # girllm — phone app (Android)
 
 Chat with your characters from your phone: her replies as she writes them,
-her photos (↻ retake), 🔊 her voice, and the character editor (card, voice
+her photos (the old ones too, ↻ retake), her picture behind the chat (same
+"Chat background" setting as the PC), 🔊 her voice, and the character editor (card, voice
 designed or recorded, face and background).
 
 **Everything stays on your network.** The app talks to one machine only:

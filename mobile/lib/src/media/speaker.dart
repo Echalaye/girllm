@@ -10,7 +10,9 @@ import 'package:just_audio/just_audio.dart';
 import 'package:path_provider/path_provider.dart';
 
 class Speaker {
-  final AudioPlayer _player = AudioPlayer();
+  /// Created on first playback: no audio resources until she speaks.
+  AudioPlayer? _audio;
+  AudioPlayer get _player => _audio ??= AudioPlayer();
 
   /// Message being prepared on the PC (GPU), or null.
   final ValueNotifier<String?> loading = ValueNotifier(null);
@@ -53,7 +55,7 @@ class Speaker {
     _generation++;
     loading.value = null;
     playing.value = null;
-    await _player.stop();
+    await _audio?.stop();
   }
 
   Future<void> _deleteFile() async {
@@ -65,7 +67,7 @@ class Speaker {
   Future<void> dispose() async {
     await stop();
     await _deleteFile();
-    await _player.dispose();
+    await _audio?.dispose();
     loading.dispose();
     playing.dispose();
   }

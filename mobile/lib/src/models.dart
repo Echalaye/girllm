@@ -13,6 +13,8 @@ class CharacterSummary {
     required this.artStyle,
     required this.gender,
     required this.hasFace,
+    this.background = 'scene',
+    this.hasBackground = false,
   });
 
   factory CharacterSummary.fromJson(Map<String, dynamic> j) => CharacterSummary(
@@ -22,6 +24,8 @@ class CharacterSummary {
         artStyle: _string(j['artStyle'], 'realistic'),
         gender: _string(j['gender'], 'female'),
         hasFace: _bool(j['hasFace']),
+        background: _string(j['background'], 'scene'),
+        hasBackground: _bool(j['hasBackground']),
       );
 
   final String id;
@@ -30,6 +34,11 @@ class CharacterSummary {
   final String artStyle;
   final String gender;
   final bool hasFace;
+
+  /// Behind the chat: 'scene' (her generated scene) or 'latest' (her latest
+  /// photo in this chat, else her scene).
+  final String background;
+  final bool hasBackground;
 
   bool get isMale => gender == 'male';
 }

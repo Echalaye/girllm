@@ -78,16 +78,36 @@ class _GirllmAppState extends State<GirllmApp> {
     } else if (services == null) {
       home = PairScreen(onPaired: _paired);
     } else {
-      home = ServicesScope(services: services, child: const CharactersScreen());
+      home = const CharactersScreen();
     }
-    return MaterialApp(
+    return GirllmShell(services: services, home: home);
+  }
+}
+
+/// The app around its screens. [ServicesScope] must sit ABOVE the
+/// [MaterialApp]: screens opened with `Navigator.push` (chat, editor,
+/// dialogs) are siblings of `home` inside the navigator, not its children,
+/// so a scope placed around `home` alone is invisible to them.
+class GirllmShell extends StatelessWidget {
+  const GirllmShell({super.key, required this.services, required this.home});
+
+  /// null while not paired (the pairing screen needs no services).
+  final Services? services;
+  final Widget home;
+
+  @override
+  Widget build(BuildContext context) {
+    final services = this.services;
+    final app = MaterialApp(
+      // A new navigator (empty history) on pairing / unpairing.
+      key: ValueKey(services),
       title: 'girllm',
       theme: girllmTheme(Brightness.light),
       darkTheme: girllmTheme(Brightness.dark),
       themeMode: ThemeMode.dark,
       debugShowCheckedModeBanner: false,
-      // Each state (pairing / paired) gets its own navigator stack.
-      home: KeyedSubtree(key: ValueKey(services), child: home),
+      home: home,
     );
+    return services == null ? app : ServicesScope(services: services, child: app);
   }
 }

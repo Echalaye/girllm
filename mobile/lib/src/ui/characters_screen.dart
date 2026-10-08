@@ -148,6 +148,8 @@ class _Avatar extends StatelessWidget {
                   cache: services.pictures,
                   load: () => services.api.picture(character.id, 'face'),
                   placeholder: initial,
+                  showError: false,
+                  decodeWidth: 48,
                   semanticLabel: character.name,
                 ),
               ),
