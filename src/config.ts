@@ -114,7 +114,7 @@ const ConfigSchema = z
       .string()
       .regex(/^[a-z0-9_]+$/)
       .default('karras'),
-    // Tuned for realistic "sent from a phone" photos; see README for an anime variant.
+    // Tuned for realistic "sent from a phone" photos; see docs/configuration.md for an anime variant.
     IMAGE_STYLE: z.preprocess(
       blankAsUnset,
       z.string().max(500).default(

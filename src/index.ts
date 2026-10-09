@@ -369,7 +369,7 @@ async function main(): Promise<void> {
     const addresses = lanAddresses();
     app.log.info(
       `Phone app: on (https://${addresses[0] ?? '<no private address>'}:${config.lan.port}, ` +
-        `${devices.list().length} paired; pair a phone in Settings → Phone). Certificate ${lanCert.fingerprint.slice(0, 16)}…`,
+        `${devices.list().length} paired; pair a phone in Settings → Phone app). Certificate ${lanCert.fingerprint.slice(0, 16)}…`,
     );
   } else {
     app.log.info('Phone app: off (set LAN_ENABLED=true in .env to use it on your local network)');

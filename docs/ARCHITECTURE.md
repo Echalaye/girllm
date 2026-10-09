@@ -1,5 +1,7 @@
 # Architecture
 
+How girllm is built inside. For using it, see the [documentation index](README.md).
+
 ## Overview
 
 ```
@@ -92,7 +94,7 @@ public/voice.js (🔊, playback queue) ──► /api/tts ──► voice/speech
 | `src/lan/devices.ts`                                  | `DeviceStore`: one-time pairing code (5 min, 5 tries), phone tokens (SHA-256 only), revoke                                                  |
 | `src/lan/lanAccess.ts`                                | PC-only pairing/phone routes (QR SVG); phone listener guard (private address, no Origin, bearer)                                            |
 | `public/phone.js`                                     | Settings → _Phone app_: QR code with countdown, paired phones, Remove                                                                       |
-| `mobile/`                                             | Android app (Flutter): pinned HTTPS client, QR pairing, chat, photos, voice, editor ([README](../mobile/README.md))                         |
+| `mobile/`                                             | Android app (Flutter): pinned HTTPS client, QR pairing, chat, photos, voice, editor ([guide](mobile-app.md))                                |
 | `scripts/setupVoice.ts`                               | `npm run setup:voice`: Whisper (download, checksum, atomic extract) and Qwen3-TTS into ComfyUI                                              |
 | `scripts/comfySetupLib.ts`                            | Shared by the setups: node pack at a pinned commit, verified model files, missing Python packages at exact versions                         |
 | `public/voice.js`                                     | `Recorder` (mic → 16 kHz mono float32) and `Speaker` (ordered playback, per-message progress, preparing/playing state, `whenIdle()`)        |
