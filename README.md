@@ -36,15 +36,35 @@ code.
 
 ## Requirements
 
-| What                                  | Notes                                                                                                             |
-| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| Windows, an NVIDIA GPU                | 8 GB of VRAM (tested: RTX 5060). Windows is the tested platform; elsewhere, `npm run launch` replaces `start.bat` |
-| [Node.js](https://nodejs.org) ≥ 22.13 | For the built-in `node:sqlite` module                                                                             |
-| [Ollama](https://ollama.com), recent  | Old builds don't support the RTX 50 series and silently run on the CPU                                            |
-| Optional: ComfyUI portable            | For photos and her voice                                                                                          |
-| Optional: Flutter                     | To build the phone app                                                                                            |
+| What                        | Notes                                                                                           |
+| --------------------------- | ----------------------------------------------------------------------------------------------- |
+| Windows 10 (1809+) or 11    | The tested platform; elsewhere, install by hand and use `npm run launch` instead of `start.bat` |
+| An NVIDIA GPU, 8 GB of VRAM | Tested: RTX 5060. A recent NVIDIA driver                                                        |
+| Disk space                  | ~10 GB for the chat alone, up to ~50 GB with photos, anime and voice                            |
+
+The installer gets everything else: Node.js ≥ 22.13, Git, [Ollama](https://ollama.com), ComfyUI portable and the
+models. Only the phone app needs a tool you install yourself ([Flutter](https://flutter.dev)).
 
 ## Setup
+
+### Option A: the installer (recommended)
+
+```powershell
+git clone https://github.com/Echalaye/girllm.git      # or download the repository as a ZIP and extract it
+```
+
+Then **double-click `install.bat`** in the girllm folder. It asks your name, the language, the chat model and which
+extras you want (photos, voice, phone app), shows the download size, then:
+
+- installs what is missing with `winget` (Node.js, Git, Ollama, 7-Zip),
+- sets Ollama's recommended settings and pulls the models,
+- installs ComfyUI portable (pinned release, SHA-256-checked) with the photo and voice models,
+- fills in `.env` with your answers, and puts a **girllm** shortcut on the desktop.
+
+It is safe to run again: finished steps are skipped, so it also completes or repairs an install, or adds an option
+later. Details: [Installation → The installer](docs/installation.md#the-installer-recommended).
+
+### Option B: by hand
 
 **1. Ollama and a chat model.** Install Ollama, set the user environment variables `OLLAMA_FLASH_ATTENTION=1` and
 `OLLAMA_KV_CACHE_TYPE=q8_0`, restart Ollama, then:
@@ -54,7 +74,7 @@ ollama pull mistral-nemo:12b-instruct-2407-q4_K_M
 ollama pull paraphrase-multilingual        # memory search
 ```
 
-**2. girllm.**
+**2. girllm** (needs [Node.js](https://nodejs.org) ≥ 22.13 and Git).
 
 ```powershell
 git clone https://github.com/Echalaye/girllm.git
@@ -65,18 +85,19 @@ copy .env.example .env                     # then set USER_NAME, REPLY_LANGUAGE,
 
 **3. Optional extras**, each documented step by step:
 
-- **Photos**: install ComfyUI portable, set `COMFYUI_DIR` and `IMAGE_CHECKPOINT` in `.env`, then
-  `npm run setup:images -- --flux2-klein` ([Installation → Photos](docs/installation.md#3-optional-photos-comfyui)).
+- **Photos**: install ComfyUI portable, set `COMFYUI_DIR` in `.env`, then `npm run setup:images -- --flux2-klein`
+  ([Installation → Photos](docs/installation.md#3-optional-photos-comfyui)).
 - **Voice**: `npm run setup:voice` ([Installation → Voice](docs/installation.md#4-optional-voice)).
 - **Phone app**: `LAN_ENABLED=true`, build with Flutter, pair with a QR code ([Phone app](docs/mobile-app.md)).
 
-The full guide, with every option: [docs/installation.md](docs/installation.md). All `.env` values:
+The full guide: [docs/installation.md](docs/installation.md). All `.env` values:
 [docs/configuration.md](docs/configuration.md).
 
 ## Run
 
-**Double-click `start.bat`.** It starts Ollama and ComfyUI if they aren't running, rebuilds girllm if
-the code changed, starts it and opens **http://127.0.0.1:3210**. `Ctrl+C` in its window stops what it started.
+**Double-click the girllm shortcut (or `start.bat`).** It starts Ollama and ComfyUI if they aren't running, rebuilds
+girllm if the code changed, starts it and opens **http://127.0.0.1:3210**. `Ctrl+C` in its window stops what it
+started.
 
 Other ways:
 
@@ -94,7 +115,7 @@ left) changes your name, the language, the model, photo and voice options withou
 
 | Guide                                      | What's inside                                                       |
 | ------------------------------------------ | ------------------------------------------------------------------- |
-| [Installation](docs/installation.md)       | Every setup step, the launcher, checking the GPU                    |
+| [Installation](docs/installation.md)       | The installer, every setup step by hand, the launcher, the GPU      |
 | [Configuration](docs/configuration.md)     | All `.env` variables and the Settings panel                         |
 | [Choosing a chat model](docs/models.md)    | Models for 8 GB of VRAM and how to compare them                     |
 | [Characters](docs/characters.md)           | Editor, card files and fields, reference face, languages, lorebooks |

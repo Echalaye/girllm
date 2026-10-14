@@ -14,6 +14,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:installer": "pwsh -NoProfile -File scripts/install/tests.ps1",
     "setup:voice": "tsx scripts/setupVoice.ts",
     "setup:images": "tsx scripts/setupImages.ts",
     "lint": "eslint .",

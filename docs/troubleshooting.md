@@ -2,6 +2,24 @@
 
 The girllm window (or `npm run dev`) logs what is on or off at startup, and why: start there.
 
+## Installer
+
+`install.bat` stops with a message when something is missing; fix it and run it again (finished steps are
+skipped). The full log is in `data\logs\install.log`.
+
+| Message / problem                                 | Fix                                                                                                                                                      |
+| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| "winget (App Installer) is missing"               | Install **App Installer** from the Microsoft Store (Windows 10), then run `install.bat` again.                                                           |
+| "No NVIDIA GPU found"                             | girllm needs an NVIDIA GPU with a recent driver. Install the driver from nvidia.com; on a PC without one, only the chat would work (slowly, on the CPU). |
+| "Your NVIDIA driver (…) is too old for this GPU"  | RTX 50 series: install the latest Game Ready or Studio driver, then run the installer again.                                                             |
+| A tool can't be installed (Node.js, Git, Ollama…) | Windows asked for permission and it was refused, or winget is blocked by policy: install that tool from its website, then run `install.bat` again.       |
+| "Ollama did not start"                            | Start Ollama from the Start menu, then run `install.bat` again.                                                                                          |
+| "The ComfyUI download is corrupted…"              | The file didn't match its pinned SHA-256 and was deleted (an interrupted or altered download): run `install.bat` again.                                  |
+| `npm ci` fails with "EPERM" / a locked file       | girllm (or an editor) is using `node_modules`: close girllm's window, then run `install.bat` again.                                                      |
+| `setup:images` / `setup:voice` fails              | Usually a download interrupted by the network: run `install.bat` again (verified files are kept). Details: [Photos](#photos), [Voice](#voice).           |
+| The firewall rule wasn't added                    | The administrator prompt was refused: add it by hand ([Phone app → step 1](mobile-app.md#1-turn-phone-access-on-on-the-pc)).                             |
+| "running scripts is disabled on this system"      | Start the installer with `install.bat`, not `install.ps1`: it runs PowerShell with `-ExecutionPolicy Bypass` for that run only.                          |
+
 ## Chat
 
 | Problem                                                  | Fix                                                                                                                                                                                        |

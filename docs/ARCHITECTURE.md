@@ -1,6 +1,6 @@
 # Architecture
 
-How girllm is built inside. For using it, see the [documentation index](README.md).
+How girllm is built inside. For using it, see the [documentation](../README.md#documentation).
 
 ## Overview
 
@@ -235,6 +235,8 @@ refused (safety) · `428` face upload without consent · `401` phone token missi
 | `.github/workflows/ci.yml`                            | Format, lint, type check, tests and build on Node 22 and 24 (read-only permissions, cancels outdated runs)                     |
 | `scripts/launch.ts` + `start.bat`                     | Launcher: start Ollama and ComfyUI if needed, rebuild if stale, start girllm, open the browser, stop on Ctrl+C what it started |
 | `scripts/launcherLib.ts`                              | Testable launcher helpers (ComfyUI layout detection, staleness, readiness polling)                                             |
+| `install.bat` + `scripts/install/install.ps1`         | Windows installer (PowerShell 5.1): checks, questions, winget tools, Ollama, pinned ComfyUI, `.env`, setup scripts             |
+| `scripts/install/lib.ps1`, `tests.ps1`                | Its pure helpers (.env quoting for Node, GPU → ComfyUI build, sizes) and their tests (`npm run test:installer`)                |
 
 ## Prompt layout (4b)
 

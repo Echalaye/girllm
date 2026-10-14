@@ -34,6 +34,7 @@ the history.
   costs a few seconds.
 - **FLUX.2 [klein] 4B** became the realistic photo model in step 6b; SDXL is used until it is installed, and anime
   characters stay on Animagine XL 4.0.
+- **A Windows installer** (`install.bat`) now does every setup step: tools, Ollama, ComfyUI, models, `.env`.
 - **Step 8** added the phone listener (`LAN_ENABLED`, off by default) and the `devices` table (migration 5).
 
 ## Ideas for later

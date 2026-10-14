@@ -8,7 +8,7 @@ internals (modules, request flow, database schema, API, design decisions) are in
 ```
 src/            the server: HTTP API (Fastify), chat, memory, prompt, images, voice, phone listener (lan/)
 public/         the PC page: plain HTML/CSS/JS modules, no build step
-scripts/        launcher, setup of photos and voice, model and image comparison tools
+scripts/        launcher, Windows installer (install/), setup of photos and voice, comparison tools
 tests/          Vitest unit and HTTP tests (no GPU, no model: the LLM, ComfyUI and voice engines are mocked)
 characters/     the shipped character cards (also tested)
 mobile/         the Android app (Flutter): see Phone app
@@ -20,6 +20,7 @@ data/, models/  your data and downloaded models (git-ignored)
 
 | Command                           | Description                                                                                                                                                                                                                                                                                                |
 | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `install.bat`                     | Windows installer: tools, Ollama settings and models, ComfyUI, `.env`, photo and voice models, shortcut (`scripts/install/`, see [Installation](installation.md#the-installer-recommended))                                                                                                                |
 | `start.bat`                       | One-click launcher: Ollama + ComfyUI + girllm + browser (Windows)                                                                                                                                                                                                                                          |
 | `npm run launch`                  | Same launcher, any OS (`-- --no-browser` to skip the browser)                                                                                                                                                                                                                                              |
 | `npm run dev`                     | Start with hot reload (tsx)                                                                                                                                                                                                                                                                                |
@@ -29,6 +30,7 @@ data/, models/  your data and downloaded models (git-ignored)
 | `npm run build` / `npm start`     | Compile to `dist/` and run                                                                                                                                                                                                                                                                                 |
 | `npm run typecheck`               | TypeScript strict check                                                                                                                                                                                                                                                                                    |
 | `npm test`                        | Unit + HTTP tests (Vitest), no GPU needed                                                                                                                                                                                                                                                                  |
+| `npm run test:installer`          | Tests of the installer's helpers and checks on its scripts (needs PowerShell 7, `pwsh`)                                                                                                                                                                                                                    |
 | `npm run lint` / `lint:fix`       | ESLint (type-aware `typescript-eslint` strict rules)                                                                                                                                                                                                                                                       |
 | `npm run format` / `format:check` | Prettier                                                                                                                                                                                                                                                                                                   |
 | `npm run check`                   | Everything CI runs: format check, lint, types, tests                                                                                                                                                                                                                                                       |
@@ -41,7 +43,8 @@ Phone app: `flutter analyze`, `flutter test` and `flutter build apk --release` i
 `npm run check` runs everything CI runs except the build: Prettier, ESLint (type-aware `typescript-eslint` strict
 rules), the TypeScript type check and the tests. Run it before every commit.
 
-**CI**: GitHub Actions (`.github/workflows/ci.yml`) runs formatting, lint, type check, tests and build on Node 22
+**CI**: GitHub Actions (`.github/workflows/ci.yml`) runs formatting, lint, type check, tests, the installer tests and
+build on Node 22
 and 24 for every push and pull request, with read-only permissions. No GPU or model is needed.
 
 ## Conventions
@@ -55,3 +58,6 @@ and 24 for every push and pull request, with read-only permissions. No GPU or mo
   internals) in the same commit. New `.env` variables go in `.env.example` and [Configuration](configuration.md).
 - Database changes are new, ordered migrations in `src/db/migrations.ts` (never edit an existing one).
 - Formatting is Prettier's (`npm run format`); Dart code follows `dart format` and `analysis_options.yaml`.
+- **Installer scripts** (`scripts/install/*.ps1`) must run on Windows PowerShell 5.1: ASCII only, no `??`, ternary
+  or `&&`; logic goes in `lib.ps1` with a test in `tests.ps1`. Pinned versions (ComfyUI release and SHA-256) live in
+  `lib.ps1`: update them with `docs/installation.md`.

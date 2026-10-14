@@ -91,6 +91,11 @@ This rule is enforced in code and can't be configured:
 
 ## Downloads and installs
 
+- The **installer** (`install.bat`) installs Node.js, Git, Ollama and 7-Zip with `winget` from the official
+  `winget` source, downloads ComfyUI portable from its official GitHub releases at a **pinned release, checked
+  against its published SHA-256** before extraction, and runs the two setup scripts below. It runs PowerShell with
+  `-ExecutionPolicy Bypass` for its own run only, never changes the system policy, writes only user environment
+  variables (Ollama's two settings), and asks for administrator rights only for the phone's firewall rule.
 - `npm run setup:images` and `setup:voice` clone ComfyUI node packs at **pinned, reviewed commits** and download
   model files **checked against a pinned SHA-256** (Whisper archives are checked before extraction).
 - **Qwen3-TTS**: its `LoadSpeaker` node, which unpickles files, is never used; model URLs are pinned to a Hugging
