@@ -50,6 +50,7 @@ public/voice.js (🔊, playback queue) ──► /api/tts ──► voice/speech
 | `src/characters/characterService.ts`                  | Deleting a character cascades to her chats, photos, memories and face (refused while a chat is generating)                                  |
 | `src/characters/faceStore.ts`                         | Reference faces (`data/faces/<id>.png\|jpg`) and temporary portrait candidates; paths built from validated ids only                         |
 | `src/images/imageSanitizer.ts`                        | Uploaded faces: PNG/JPEG detection from the bytes, size limits, metadata stripped (EXIF, text, comments)                                    |
+| `src/images/faceImage.ts`                             | Her face from an upload or a `.png` card: sanitized, JPEG decoded (jpeg-js, limits), EXIF orientation applied, stored as PNG                |
 | `src/settings/settingsSchema.ts`                      | Settings changeable from the app (zod), `.env` defaults                                                                                     |
 | `src/settings/settingsService.ts`                     | DB-backed overrides of the `.env` defaults, change listeners; services read them through getters (`Live<T>`)                                |
 | `src/util/resolve.ts`                                 | `Live<T>` = a value or a function returning the current one (live settings without restarts)                                                |
@@ -201,7 +202,7 @@ incompatible spaces. Old memories then rank by recency until they are re-learned
 | GET    | `/api/characters/:id`                       | —                                                                                                                               | summary + `card` (editable fields) + `voice` (`{ description, createdAt }`)   |
 | PUT    | `/api/characters/:id`                       | card fields                                                                                                                     | summary (the id never changes)                                                |
 | DELETE | `/api/characters/:id`                       | —                                                                                                                               | `{ deleted, chats, memories }` (cascade); `409` while generating              |
-| POST   | `/api/characters/import`                    | `application/octet-stream`: `.json` or `.png` card, ≤ 20 MB                                                                     | `201` summary                                                                 |
+| POST   | `/api/characters/import`                    | `.json` or `.png` card, ≤ 20 MB; `?face=1` + consent header: the PNG's picture becomes her face (`428` without it)              | `201` summary                                                                 |
 | GET    | `/api/characters/:id/export`                | —                                                                                                                               | Character Card V2 JSON (download)                                             |
 | GET    | `/api/characters/:id/face`                  | —                                                                                                                               | `image/png` or `image/jpeg`                                                   |
 | PUT    | `/api/characters/:id/face`                  | octet-stream PNG/JPEG ≤ 10 MB + header `x-girllm-consent: adult-and-consenting`                                                 | `204`; `428` without the consent header                                       |
@@ -228,15 +229,15 @@ refused (safety) · `428` face upload without consent · `401` phone token missi
 
 ## Tooling
 
-| Path                                                  | Role                                                                                                                           |
-| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `eslint.config.js`                                    | Flat config: `typescript-eslint` strict type-checked rules, browser globals for `public/`, Prettier compatibility              |
-| `.prettierrc.json`, `.editorconfig`, `.gitattributes` | One formatting style, LF line endings (CRLF for `.bat`)                                                                        |
-| `.github/workflows/ci.yml`                            | Format, lint, type check, tests and build on Node 22 and 24 (read-only permissions, cancels outdated runs)                     |
-| `scripts/launch.ts` + `start.bat`                     | Launcher: start Ollama and ComfyUI if needed, rebuild if stale, start girllm, open the browser, stop on Ctrl+C what it started |
-| `scripts/launcherLib.ts`                              | Testable launcher helpers (ComfyUI layout detection, staleness, readiness polling)                                             |
-| `install.bat` + `scripts/install/install.ps1`         | Windows installer (PowerShell 5.1): checks, questions, winget tools, Ollama, pinned ComfyUI, `.env`, setup scripts             |
-| `scripts/install/lib.ps1`, `tests.ps1`                | Its pure helpers (.env quoting for Node, GPU → ComfyUI build, sizes) and their tests (`npm run test:installer`)                |
+| Path                                                   | Role                                                                                                                                              |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `eslint.config.js`                                     | Flat config: `typescript-eslint` strict type-checked rules, browser globals for `public/`, Prettier compatibility                                 |
+| `.prettierrc.json`, `.editorconfig`, `.gitattributes`  | One formatting style, LF line endings (CRLF for `.bat`)                                                                                           |
+| `.github/workflows/ci.yml`                             | Format, lint, type check, tests and build on Node 22 and 24 (read-only permissions, cancels outdated runs)                                        |
+| `scripts/launch.ts` + `start.bat`                      | Launcher: start Ollama and ComfyUI if needed, rebuild if stale, start girllm, open the browser, stop on Ctrl+C what it started                    |
+| `scripts/launcherLib.ts`                               | Testable launcher helpers (ComfyUI layout detection, when to start it, staleness, readiness polling)                                              |
+| `install.bat` + `scripts/install/install.ps1`          | Windows installer (PowerShell 5.1): checks, questions, winget tools, Ollama, pinned ComfyUI, `.env`, setup scripts                                |
+| `scripts/install/lib.ps1`, `firewall.ps1`, `tests.ps1` | Its pure helpers (.env quoting for Node, GPU → ComfyUI build, sizes), the elevated firewall-rule script, and the tests (`npm run test:installer`) |
 
 ## Prompt layout (4b)
 

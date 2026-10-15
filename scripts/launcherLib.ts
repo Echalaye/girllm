@@ -55,6 +55,26 @@ export function comfyCommand(
 }
 
 /**
+ * Should the launcher start ComfyUI? It makes her photos AND her voice, so it
+ * is needed when either is on. It does not depend on IMAGE_CHECKPOINT: with
+ * FLUX.2 [klein] (the default realistic engine) or for her voice alone, that
+ * stays empty. Without COMFYUI_DIR the launcher can't start it (it may still
+ * be running on its own: the launcher checks that first).
+ * @returns whether to start it, and why (for the launcher's log).
+ */
+export function comfyNeeded(o: { imagesEnabled: boolean; voiceEnabled: boolean; comfyDir: string | undefined }): {
+  start: boolean;
+  reason: string;
+} {
+  const uses = [o.imagesEnabled ? 'photos' : '', o.voiceEnabled ? 'her voice' : ''].filter(Boolean).join(' and ');
+  if (!uses) return { start: false, reason: 'photos and voice are off (IMAGES_ENABLED / VOICE_ENABLED)' };
+  if (!o.comfyDir?.trim()) {
+    return { start: false, reason: `needed for ${uses}, but COMFYUI_DIR is not set in .env` };
+  }
+  return { start: true, reason: `needed for ${uses}` };
+}
+
+/**
  * The ComfyUI application folder (the one with main.py, custom_nodes/ and
  * models/) inside an install folder: <dir>/ComfyUI for the Windows portable
  * build, <dir> itself for a manual install.

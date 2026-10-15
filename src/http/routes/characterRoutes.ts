@@ -15,7 +15,8 @@ import type { CharacterService } from '../../characters/characterService.js';
 import type { FaceStore } from '../../characters/faceStore.js';
 import { CharacterInputSchema, toInput, type Character } from '../../characters/schema.js';
 import { ImageUnavailableError, type ImageService } from '../../images/imageService.js';
-import { detectImageType, sanitizeImage } from '../../images/imageSanitizer.js';
+import { prepareFaceImage } from '../../images/faceImage.js';
+import { detectImageType, type SanitizedImage } from '../../images/imageSanitizer.js';
 import { MAX_VOICE_DESCRIPTION_CHARS } from '../../characters/schema.js';
 import { VoiceUnavailableError, type TextToSpeech } from '../../voice/types.js';
 import { audioContentType, type VoiceStore } from '../../voice/voiceStore.js';
@@ -38,6 +39,8 @@ const CharacterId = z.string().regex(/^[a-z0-9-]{1,80}$/);
 const IdParams = z.object({ id: CharacterId });
 const CandidateParams = z.object({ id: CharacterId, candidateId: z.string().uuid() });
 const VoiceDesignBody = z.object({ description: z.string().trim().min(1).max(MAX_VOICE_DESCRIPTION_CHARS) });
+/** Card import: `?face=1` also makes the PNG card's picture her reference face. */
+const ImportQuery = z.object({ face: z.enum(['0', '1']).default('0') });
 const VoiceClipQuery = z.object({
   rate: z.coerce.number().int(),
   source: z.enum(['recorded', 'uploaded']),
@@ -131,12 +134,22 @@ export function registerCharacterRoutes(app: FastifyInstance, deps: CharacterRou
     return { deleted: true, ...result };
   });
 
-  /** Import a SillyTavern-style card: raw .json or .png bytes. */
+  /**
+   * Import a SillyTavern-style card: raw .json or .png bytes.
+   * A PNG card IS her picture (the card data hides in a text chunk). With
+   * `?face=1` and the consent header (same attestation as a face upload: a
+   * card picture may show a real person), that picture also becomes her
+   * reference face, cleaned like any upload: the card data and every other
+   * metadata chunk are dropped. The picture is checked BEFORE the import, so
+   * a refused picture doesn't leave a half-imported character.
+   */
   app.post('/api/characters/import', { bodyLimit: MAX_CARD_BYTES }, async (request, reply) => {
     if (!Buffer.isBuffer(request.body)) throw badRequest('Send the card file as application/octet-stream', 415);
     if (request.body.length > MAX_CARD_BYTES) throw badRequest('Card file too large (max 20 MB)', 413);
+    const { face: withFace } = ImportQuery.parse(request.query);
+    const isPng = detectImageType(request.body) === 'png';
     let json: string;
-    if (detectImageType(request.body) === 'png') {
+    if (isPng) {
       try {
         json = extractCardJsonFromPng(request.body);
       } catch (err) {
@@ -151,7 +164,22 @@ export function registerCharacterRoutes(app: FastifyInstance, deps: CharacterRou
     } catch (err) {
       throw badRequest(`Invalid character card: ${(err as Error).message}`);
     }
+
+    let face: SanitizedImage | undefined;
+    if (withFace === '1') {
+      if (!isPng) throw badRequest('Only a .png card has a picture to use as her face');
+      if (request.headers[CONSENT_HEADER] !== CONSENT_VALUE) {
+        throw badRequest('Please confirm the picture shows an adult who agreed to it (or is AI-generated)', 428);
+      }
+      try {
+        face = prepareFaceImage(request.body);
+      } catch (err) {
+        throw badRequest(`The card's picture can't be used as her face: ${(err as Error).message}`);
+      }
+    }
+
     const c = await characters.import(fields);
+    if (face) await faces.save(c.id, face);
     return reply.code(201).send(summary(c));
   });
 
@@ -331,7 +359,8 @@ export function registerCharacterRoutes(app: FastifyInstance, deps: CharacterRou
     if (!Buffer.isBuffer(request.body)) throw badRequest('Send the image as application/octet-stream', 415);
     let image;
     try {
-      image = sanitizeImage(request.body);
+      // Always stored as PNG (JPEG photos are converted, upright): see faceImage.ts.
+      image = prepareFaceImage(request.body);
     } catch (err) {
       throw badRequest((err as Error).message);
     }

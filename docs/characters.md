@@ -8,8 +8,10 @@ the Character Card V2/V3 format, so cards from SillyTavern or chub.ai work as th
 - **New character** (sidebar) or the ✏ pencil next to a character opens the **editor**: name, how she writes
   (text messages or roleplay), who she is, personality, situation, first message, plus the advanced card fields
   (example dialogue, system prompt, post-history instructions, creator notes, tags).
-- **Import a card**: `.json` or `.png` cards from SillyTavern / chub.ai. You can also drop card files into
-  `characters/` and restart.
+- **Import a card**: `.json` or `.png` cards from SillyTavern / chub.ai. A `.png` card is also her picture: the
+  import offers to use it as her **reference face** (with the same confirmation as an uploaded photo, below), so her
+  photos and background start from it. "Import without it" keeps only the card. You can also drop card files into
+  `characters/` and restart (their picture is then not used: upload it in the editor).
 - **Export card** downloads a compatible V2 JSON.
 - **Delete** removes the character and also her chats, photos, memories, face and voice (after a confirmation).
 
@@ -24,7 +26,10 @@ The same editor is available in the [phone app](mobile-app.md).
   varies between photos. A _descriptive_ age ("in her mid-twenties") gives more natural results than a number.
 - **Reference face**: generate 4 portraits from her appearance and pick one, or upload a photo after confirming it
   is AI-generated, of yourself, or of an adult who agreed. Uploads are re-written without their metadata (EXIF,
-  GPS, text). The face is her avatar and is applied to her photos so she looks the same in all of them.
+  GPS, text) and stored as PNG: a JPEG photo is turned upright (phones store most photos sideways) and converted, so
+  the face detector can crop it to her face for FLUX.2 [klein]. The face is her avatar and is applied to her photos
+  so she looks the same in all of them. Anime characters only use it when "Anime face strength" (Settings,
+  `ANIME_FACE_WEIGHT`) is above 0: 0.3–0.5 works best.
 - **Background**: her picture behind the chat, either her scene or her latest photo
   ([Photos → Her picture behind the chat](photos.md#her-picture-behind-the-chat)).
 

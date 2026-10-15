@@ -36,6 +36,7 @@ $root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $scripts = @(
   (Join-Path $PSScriptRoot 'lib.ps1'),
   (Join-Path $PSScriptRoot 'install.ps1'),
+  (Join-Path $PSScriptRoot 'firewall.ps1'),
   (Join-Path $PSScriptRoot 'tests.ps1')
 )
 foreach ($file in $scripts) {
@@ -58,6 +59,20 @@ foreach ($text in @($installText, $libText)) {
   Assert-Equal $false ($code -match '\?\?') 'no ?? operator'
   Assert-Equal $false ($code -match '(?m)\)\s*&&|\)\s*\|\|') 'no && / || pipeline chains'
 }
+# Patterns antivirus heuristics treat as malware (Avast flagged an earlier
+# version as IDP.Generic): no encoded command, no hidden window, no
+# download-and-run. Everything the installer runs stays readable.
+$firewallText = Get-Content -Raw (Join-Path $PSScriptRoot 'firewall.ps1')
+foreach ($text in @($installText, $libText, $firewallText)) {
+  $code = ($text -split "`n" | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
+  Assert-Equal $false ($code -match '(?i)-EncodedCommand|FromBase64String|ToBase64String') 'no encoded command'
+  Assert-Equal $false ($code -match '(?i)WindowStyle\s+Hidden') 'no hidden window'
+  Assert-Equal $false ($code -match '(?i)Invoke-Expression|\biex\b|DownloadString') 'no download-and-run'
+}
+$ruleInstall = [regex]::Match($installText, '\$FirewallRule = ''([^'']+)''').Groups[1].Value
+$ruleScript = [regex]::Match($firewallText, '\$name = ''([^'']+)''').Groups[1].Value
+Assert-Equal 'girllm phone (local network)' $ruleInstall 'firewall rule name found in install.ps1'
+Assert-Equal $ruleInstall $ruleScript 'same firewall rule name in install.ps1 and firewall.ps1'
 $bat = [System.IO.File]::ReadAllText((Join-Path $root 'install.bat'))
 Assert-Equal $true ($bat -match 'scripts\\install\\install\.ps1') 'install.bat runs install.ps1'
 

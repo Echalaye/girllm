@@ -1282,3 +1282,13 @@ dialog.editor {
 .device-list li button {
   margin-left: auto;
 }
+
+/* The picture of a .png card, before it becomes her face. */
+.import-face-preview {
+  display: block;
+  max-width: 100%;
+  max-height: min(11rem, 30vh);
+  margin: 0 auto 0.75rem;
+  border-radius: 8px;
+  object-fit: contain;
+}

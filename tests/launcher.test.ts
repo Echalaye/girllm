@@ -2,7 +2,15 @@ import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { COMFY_ENV, comfyCommand, comfyRoot, isLocalUrl, isStale, waitUntilUp } from '../scripts/launcherLib.js';
+import {
+  COMFY_ENV,
+  comfyCommand,
+  comfyNeeded,
+  comfyRoot,
+  isLocalUrl,
+  isStale,
+  waitUntilUp,
+} from '../scripts/launcherLib.js';
 
 const tmp = () => mkdtempSync(join(tmpdir(), 'girllm-launch-'));
 
@@ -46,6 +54,32 @@ describe('comfyCommand', () => {
     expect(comfyCommand(dir, 9000, 'win32')!.command).toBe('python');
     expect(comfyCommand(dir, 9000, 'win32')!.env).toEqual(COMFY_ENV);
     expect(comfyCommand(tmp(), 8188)).toBeUndefined();
+  });
+});
+
+describe('comfyNeeded', () => {
+  const dir = 'C:\\AI\\ComfyUI_windows_portable';
+
+  it('starts ComfyUI for photos, whatever the photo model (FLUX.2 needs no IMAGE_CHECKPOINT)', () => {
+    expect(comfyNeeded({ imagesEnabled: true, voiceEnabled: false, comfyDir: dir })).toEqual({
+      start: true,
+      reason: 'needed for photos',
+    });
+  });
+
+  it('starts ComfyUI for her voice alone, photos off', () => {
+    expect(comfyNeeded({ imagesEnabled: false, voiceEnabled: true, comfyDir: dir }).start).toBe(true);
+    expect(comfyNeeded({ imagesEnabled: true, voiceEnabled: true, comfyDir: dir }).reason).toBe(
+      'needed for photos and her voice',
+    );
+  });
+
+  it('does not start it when nothing needs it, or without COMFYUI_DIR (and says why)', () => {
+    expect(comfyNeeded({ imagesEnabled: false, voiceEnabled: false, comfyDir: dir }).start).toBe(false);
+    const noDir = comfyNeeded({ imagesEnabled: true, voiceEnabled: true, comfyDir: undefined });
+    expect(noDir.start).toBe(false);
+    expect(noDir.reason).toMatch(/COMFYUI_DIR is not set/);
+    expect(comfyNeeded({ imagesEnabled: true, voiceEnabled: false, comfyDir: '  ' }).start).toBe(false);
   });
 });
 

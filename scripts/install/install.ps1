@@ -386,7 +386,7 @@ function Install-OllamaModels($Choice) {
   if (-not (Test-Url $api)) {
     $app = "$env:LOCALAPPDATA\Programs\Ollama\ollama app.exe"
     if (Test-Path -LiteralPath $app) { Start-Process -FilePath $app }
-    else { Start-Process -FilePath $ollama -ArgumentList 'serve' -WindowStyle Hidden }
+    else { Start-Process -FilePath $ollama -ArgumentList 'serve' -WindowStyle Minimized }
     $deadline = (Get-Date).AddSeconds(60)
     while (-not (Test-Url $api)) {
       if ((Get-Date) -gt $deadline) { throw 'Ollama did not start. Start it from the Start menu, then run install.bat again.' }
@@ -539,14 +539,13 @@ function Enable-PhoneAccess($Choice) {
   } else {
     Write-Info 'Adding a firewall rule: this port only, your local network only, Private networks only.'
     Write-Info 'Windows asks for administrator permission once.'
-    $command = "New-NetFirewallRule -DisplayName '$FirewallRule' -Direction Inbound -Protocol TCP " +
-      "-LocalPort $port -Profile Private -RemoteAddress LocalSubnet -Action Allow | Out-Null"
-    # -EncodedCommand: Start-Process doesn't quote arguments, so the command
-    # goes as Base64 (UTF-16LE), the form powershell.exe expects.
-    $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($command))
+    # A separate, readable script (firewall.ps1) run elevated: never an encoded
+    # or hidden command, which antivirus heuristics rightly treat as suspicious.
+    $script = Join-Path $PSScriptRoot 'firewall.ps1'
     try {
-      $p = Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait -PassThru -WindowStyle Hidden `
-        -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $encoded)
+      # Start-Process doesn't quote arguments: the path is quoted by hand.
+      $p = Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait -PassThru `
+        -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$script`"", '-Port', $port)
       if ($p.ExitCode -ne 0) { throw "exit code $($p.ExitCode)" }
       Write-Ok "Firewall rule added (TCP $port, local subnet, Private networks)"
     } catch {

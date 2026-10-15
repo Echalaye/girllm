@@ -190,7 +190,8 @@ and pair it with a QR code: the whole procedure is in [Phone app](mobile-app.md)
 **Double-click `start.bat`.** It:
 
 1. starts **Ollama** if it isn't running yet;
-2. starts **ComfyUI** if photos are configured and `COMFYUI_DIR` is set (its log goes to `data\logs\comfyui.log`);
+2. starts **ComfyUI** when photos or her voice are on and `COMFYUI_DIR` is set, whatever the photo model (its log
+   goes to `data\logs\comfyui.log`); the window says why it did or didn't;
 3. rebuilds girllm if the code changed, starts it, and opens the browser.
 
 `Ctrl+C` in its window stops everything **it** started; services that were already running are left alone.

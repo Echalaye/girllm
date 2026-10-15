@@ -1044,16 +1044,53 @@ const editor = new CharacterEditor({
 /** Import a card file (.json or .png from SillyTavern, chub.ai…). */
 async function importCard(file) {
   if (file.size > 20 * 1024 * 1024) throw new Error('This file is larger than 20 MB.');
-  const res = await fetch('/api/characters/import', {
+  // A .png card is her picture: offer it as her face (with the same consent
+  // as a photo upload). Cancel imports nothing.
+  let withFace = false;
+  if (await isPng(file)) {
+    const answer = await askImportFace(file);
+    if (answer === 'cancel') return;
+    withFace = answer === 'with';
+  }
+  const headers = { 'Content-Type': 'application/octet-stream' };
+  if (withFace) headers['x-girllm-consent'] = 'adult-and-consenting';
+  const res = await fetch(`/api/characters/import${withFace ? '?face=1' : ''}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/octet-stream' },
+    headers,
     body: file,
   });
   await ensureOk(res);
   const summary = await res.json();
   await loadCharacters();
   await selectCharacter(summary.id);
-  setStatus(`${summary.name} imported`);
+  setStatus(withFace ? `${summary.name} imported, with the card's picture as her face` : `${summary.name} imported`);
+}
+
+/** PNG signature check (the file name and type can lie). */
+async function isPng(file) {
+  const head = new Uint8Array(await file.slice(0, 8).arrayBuffer());
+  return [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a].every((byte, i) => head[i] === byte);
+}
+
+/** Shows the card's picture: 'with' (as her face, consent given), 'without' or 'cancel'. */
+async function askImportFace(file) {
+  const dialog = $('import-face-dialog');
+  const preview = $('import-face-preview');
+  // A data: URL (the CSP allows data: images, not blob:).
+  preview.src = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener('load', () => resolve(String(reader.result)));
+    reader.addEventListener('error', () => reject(new Error('This file could not be read.')));
+    reader.readAsDataURL(file);
+  });
+  $('import-face-check').checked = false;
+  dialog.returnValue = '';
+  dialog.showModal();
+  const answer = await new Promise((resolve) =>
+    dialog.addEventListener('close', () => resolve(dialog.returnValue), { once: true }),
+  );
+  preview.removeAttribute('src'); // free the memory of a large picture
+  return answer === 'with' || answer === 'without' ? answer : 'cancel';
 }
 
 function showNoCharacters() {

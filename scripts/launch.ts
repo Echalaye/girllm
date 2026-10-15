@@ -2,7 +2,7 @@
  * One-click launcher (used by start.bat):
  *
  *   1. Ollama   — started with `ollama serve` if it isn't running yet
- *   2. ComfyUI  — started from COMFYUI_DIR if photos are configured
+ *   2. ComfyUI  — started from COMFYUI_DIR when photos or her voice are on
  *   3. girllm   — rebuilt if the sources changed, then started
  *   4. browser  — opened on the app once it answers (skip with --no-browser)
  *
@@ -14,7 +14,7 @@ import { createWriteStream, mkdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
 import { loadConfig } from '../src/config.js';
-import { comfyCommand, isLocalUrl, isStale, isUp, waitUntilUp } from './launcherLib.js';
+import { comfyCommand, comfyNeeded, isLocalUrl, isStale, isUp, waitUntilUp } from './launcherLib.js';
 
 const ROOT = resolve(import.meta.dirname, '..');
 const isWindows = process.platform === 'win32';
@@ -127,8 +127,20 @@ async function main(): Promise<void> {
   const openBrowserAtEnd = !process.argv.includes('--no-browser');
 
   if (config.llm.provider === 'ollama') await ensureOllama(config.llm.baseUrl);
-  if (config.images.enabled && config.images.checkpoint) {
+  // ComfyUI makes her photos and her voice: start it when either is on
+  // (whatever the photo model: FLUX.2 [klein] needs no IMAGE_CHECKPOINT).
+  const comfy = comfyNeeded({
+    imagesEnabled: config.images.enabled,
+    voiceEnabled: config.voice.enabled,
+    comfyDir: config.images.comfyDir,
+  });
+  if (config.images.enabled || config.voice.enabled) {
+    // Needed: ensureComfy uses one already running, else starts it from
+    // COMFYUI_DIR (or says it can't).
+    log(`ComfyUI: ${comfy.reason}`);
     await ensureComfy(config.images.comfyUrl, config.images.comfyDir, join(resolve(config.databasePath, '..'), 'logs'));
+  } else {
+    log(`ComfyUI not started: ${comfy.reason}`);
   }
 
   buildIfNeeded();

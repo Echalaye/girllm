@@ -7,6 +7,8 @@ import { mkdtemp, readdir, readFile, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
+import jpeg from 'jpeg-js';
+import { PNG } from 'pngjs';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CharacterRejectedError, CharacterRepository } from '../src/characters/characterRepository.js';
 import { CharacterService } from '../src/characters/characterService.js';
@@ -47,6 +49,27 @@ function png(width = 256, height = 256, extra: Buffer[] = [], idatBytes = 6): Bu
     chunk('IDAT', Buffer.alloc(idatBytes, 1)),
     chunk('IEND', Buffer.alloc(0)),
   ]);
+}
+
+/** A real JPEG (w×h) with an EXIF block giving this orientation (1–8). */
+function jpegWithOrientation(width: number, height: number, orientation: number): Buffer {
+  const data = Buffer.alloc(width * height * 4, 200);
+  const encoded = jpeg.encode({ data, width, height }, 90).data;
+  // TIFF (little endian): header, IFD0 with one entry: Orientation (0x0112), SHORT, 1 value.
+  const tiff = Buffer.alloc(8 + 2 + 12 + 4);
+  tiff.write('II', 0, 'latin1');
+  tiff.writeUInt16LE(42, 2);
+  tiff.writeUInt32LE(8, 4);
+  tiff.writeUInt16LE(1, 8);
+  tiff.writeUInt16LE(0x0112, 10);
+  tiff.writeUInt16LE(3, 12);
+  tiff.writeUInt32LE(1, 14);
+  tiff.writeUInt16LE(orientation, 18);
+  const payload = Buffer.concat([Buffer.from('Exif\0\0', 'latin1'), tiff]);
+  const app1 = Buffer.alloc(4);
+  app1.writeUInt16BE(0xffe1, 0);
+  app1.writeUInt16BE(payload.length + 2, 2);
+  return Buffer.concat([encoded.subarray(0, 2), app1, payload, encoded.subarray(2)]);
 }
 
 const input = (overrides: Record<string, unknown> = {}) =>
@@ -341,6 +364,53 @@ describe('Character editor HTTP API', () => {
     expect(res.json()).toMatchObject({ id: 'mia', name: 'Mia' });
     expect((await upload('POST', '/api/characters/import', Buffer.from('{nope'))).statusCode).toBe(400);
     expect((await upload('POST', '/api/characters/import', png())).statusCode).toBe(400); // PNG without card
+  });
+
+  it('imports a .png card with its picture as her face, only with consent', async () => {
+    const s = await makeApp();
+    const card = { spec: 'chara_card_v2', data: { name: 'Nova', description: 'adult' } };
+    const cardPng = png(256, 256, [
+      Buffer.from(`chara\0${Buffer.from(JSON.stringify(card)).toString('base64')}`, 'latin1'),
+      Buffer.from('Author\0Somebody'),
+    ]);
+
+    // Asked for the face without the attestation: refused, and nothing imported.
+    expect((await upload('POST', '/api/characters/import?face=1', cardPng)).statusCode).toBe(428);
+    const before = await app.inject({ method: 'GET', url: '/api/characters', headers: { host: HOST } });
+    expect(before.json().map((c: { id: string }) => c.id)).not.toContain('nova');
+
+    const res = await upload('POST', '/api/characters/import?face=1', cardPng, { [CONSENT_HEADER]: CONSENT_VALUE });
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toMatchObject({ id: 'nova', hasFace: true });
+    // The saved face is the picture alone: no card data, no metadata.
+    const stored = (await readFile(s.faces.get('nova')!.path)).toString('latin1');
+    expect(stored).not.toContain('chara');
+    expect(stored).not.toContain('Somebody');
+
+    // Without ?face=1 the picture is ignored, as before.
+    const other = { spec: 'chara_card_v2', data: { name: 'Iris', description: 'adult' } };
+    const plain = png(256, 256, [
+      Buffer.from(`chara\0${Buffer.from(JSON.stringify(other)).toString('base64')}`, 'latin1'),
+    ]);
+    const imported = await upload('POST', '/api/characters/import', plain);
+    expect(imported.json()).toMatchObject({ id: 'iris', hasFace: false });
+
+    // A JSON card has no picture to use.
+    const json = Buffer.from(JSON.stringify({ spec: 'chara_card_v2', data: { name: 'Lou', description: 'adult' } }));
+    const noPicture = await upload('POST', '/api/characters/import?face=1', json, { [CONSENT_HEADER]: CONSENT_VALUE });
+    expect(noPicture.statusCode).toBe(400);
+  });
+
+  it('stores an uploaded JPEG face as an upright PNG (the face detector reads PNG only)', async () => {
+    const s = await makeApp();
+    await send('POST', '/api/characters', input());
+    const photo = jpegWithOrientation(80, 64, 6); // stored sideways, "rotate 90°" tag
+    const res = await upload('PUT', '/api/characters/lena/face', photo, { [CONSENT_HEADER]: CONSENT_VALUE });
+    expect(res.statusCode).toBe(204);
+    const face = s.faces.get('lena')!;
+    expect(face.type).toBe('png');
+    const stored = PNG.sync.read(await readFile(face.path));
+    expect([stored.width, stored.height]).toEqual([64, 80]); // turned upright
   });
 
   it('requires consent for face uploads and strips metadata', async () => {

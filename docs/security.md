@@ -83,7 +83,9 @@ This rule is enforced in code and can't be configured:
 - **Uploaded faces** need an explicit confirmation that the picture is AI-generated, of yourself, or of an adult
   who agreed (the API refuses an upload without it: `428`). The file must be a real PNG or JPEG (checked from the
   bytes, not the file name) between 64 and 4096 px, and is re-written keeping only the image data: EXIF (GPS,
-  camera), text and comments are dropped.
+  camera), text and comments are dropped. JPEGs are decoded (pure JavaScript, with resolution and memory limits) and
+  stored as PNG, so nothing of the original file but its pixels is kept. The picture of an imported `.png` card can
+  become her face only with the same confirmation, and loses its card data the same way.
 - **A real person's voice** (recorded or uploaded) needs a confirmation that it is your own voice or that of an
   adult who agreed; the API refuses the clip without that attestation (`428`) and stores when it was given next to
   the clip. Clips are decoded in the browser (or on the phone) and sent as raw PCM (4–30 s of speech after
@@ -95,7 +97,8 @@ This rule is enforced in code and can't be configured:
   `winget` source, downloads ComfyUI portable from its official GitHub releases at a **pinned release, checked
   against its published SHA-256** before extraction, and runs the two setup scripts below. It runs PowerShell with
   `-ExecutionPolicy Bypass` for its own run only, never changes the system policy, writes only user environment
-  variables (Ollama's two settings), and asks for administrator rights only for the phone's firewall rule.
+  variables (Ollama's two settings), and asks for administrator rights only for the phone's firewall rule (a separate, readable script,
+  `scripts/install/firewall.ps1`: no encoded or hidden command).
 - `npm run setup:images` and `setup:voice` clone ComfyUI node packs at **pinned, reviewed commits** and download
   model files **checked against a pinned SHA-256** (Whisper archives are checked before extraction).
 - **Qwen3-TTS**: its `LoadSpeaker` node, which unpickles files, is never used; model URLs are pinned to a Hugging
